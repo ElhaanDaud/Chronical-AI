@@ -34,14 +34,14 @@ def determine_state(heat_score: float, current_state: str, last_article_at: date
 async def run_lifecycle(db: AsyncSession) -> dict[str, int]:
     result = await db.execute(
         select(Cluster)
-        .options(selectinload(Cluster.articles))
+        .options(selectinload(Cluster.articles), selectinload(Cluster.commits))
     )
     clusters = list(result.scalars().all())
 
     transitions = {"active": 0, "cooling": 0, "hibernated": 0}
 
     for cluster in clusters:
-        new_heat = calculate_heat(cluster.articles)
+        new_heat = calculate_heat(cluster.articles, cluster.commits)
         cluster.heat_score = new_heat
 
         new_state = determine_state(new_heat, cluster.state, cluster.last_article_at)

@@ -1,5 +1,8 @@
 import math
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
+from io import StringIO
 
 import numpy as np
 import spacy
@@ -13,11 +16,47 @@ from sqlalchemy.orm import selectinload
 from app.core.logging import logger
 from app.models.article import Article
 from app.models.cluster import Cluster
+from app.models.commit import Commit
 
 MIN_ARTICLES_TO_CLUSTER = 3
 MAX_CLUSTERS = 25
 SIMILARITY_THRESHOLD = 0.3
 DECAY_LAMBDA = 0.15
+
+_NOISE_PATTERN = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+
+
+class _HTMLStripper(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._fed: list[str] = []
+        self._skip = False
+
+    def handle_starttag(self, tag, attrs):
+        self._skip = tag in ("script", "style")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            self._skip = False
+
+    def handle_data(self, data):
+        if not self._skip:
+            self._fed.append(data)
+
+    def get_text(self) -> str:
+        return " ".join(self._fed)
+
+
+def clean_text(html_str: str | None) -> str:
+    if not html_str:
+        return ""
+    stripper = _HTMLStripper()
+    stripper.feed(html_str)
+    text = stripper.get_text()
+    text = _NOISE_PATTERN.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
 
 nlp = spacy.load("en_core_web_sm")
 
@@ -38,13 +77,19 @@ def entity_overlap_score(article_entities: list[str], cluster_entities: list[str
     return len(a & c) / len(a | c)
 
 
-def calculate_heat(articles: list[Article]) -> float:
+def calculate_heat(articles: list[Article], commits: list | None = None) -> float:
     now = datetime.now(timezone.utc)
     score = 0.0
     for article in articles:
         if article.published_at:
             delta_days = (now - article.published_at).total_seconds() / 86400
             score += math.exp(-DECAY_LAMBDA * max(delta_days, 0))
+
+    if commits:
+        ten_days_ago = now - timedelta(days=10)
+        recent_commits = sum(1 for c in commits if c.commit_date >= ten_days_ago)
+        score += 0.5 * recent_commits
+
     return round(score, 2)
 
 
@@ -70,13 +115,13 @@ async def run_clustering(db: AsyncSession) -> int:
         return 0
 
     for article in unclustered:
-        text = f"{article.title} {article.summary or ''}"
+        text = f"{article.title} {clean_text(article.summary)}"
         article.entities = extract_entities(text)
 
     result = await db.execute(
         select(Cluster)
         .where(Cluster.state.in_(["active", "cooling"]))
-        .options(selectinload(Cluster.articles))
+        .options(selectinload(Cluster.articles), selectinload(Cluster.commits))
     )
     existing_clusters = list(result.scalars().all())
 
@@ -87,10 +132,10 @@ async def run_clustering(db: AsyncSession) -> int:
         cluster_texts = []
         for cluster in existing_clusters:
             recent_articles = sorted(cluster.articles, key=lambda a: a.published_at, reverse=True)[:20]
-            combined = " ".join(f"{a.title} {a.summary or ''}" for a in recent_articles)
+            combined = " ".join(f"{a.title} {clean_text(a.summary)}" for a in recent_articles)
             cluster_texts.append(combined)
 
-        article_texts = [f"{a.title} {a.summary or ''}" for a in unclustered]
+        article_texts = [f"{a.title} {clean_text(a.summary)}" for a in unclustered]
         all_texts = cluster_texts + article_texts
 
         vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
@@ -132,7 +177,7 @@ async def run_clustering(db: AsyncSession) -> int:
     new_clusters_count = 0
 
     if len(unmatched) >= MIN_ARTICLES_TO_CLUSTER:
-        texts = [f"{a.title} {a.summary or ''}" for a in unmatched]
+        texts = [f"{a.title} {clean_text(a.summary)}" for a in unmatched]
         vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
         tfidf = vectorizer.fit_transform(texts)
 
@@ -170,7 +215,7 @@ async def run_clustering(db: AsyncSession) -> int:
 
     for cluster in existing_clusters:
         all_articles = cluster.articles + [a for a in unclustered if a.cluster_id == cluster.id]
-        cluster.heat_score = calculate_heat(all_articles)
+        cluster.heat_score = calculate_heat(all_articles, cluster.commits)
 
     await db.commit()
 

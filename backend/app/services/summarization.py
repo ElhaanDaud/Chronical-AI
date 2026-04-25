@@ -13,12 +13,13 @@ from app.core.logging import logger
 from app.models.article import Article
 from app.models.cluster import Cluster
 from app.models.commit import Commit
+from app.services.clustering import clean_text
 
 
 def generate_commit(articles: list[Article]) -> tuple[str, str]:
     recent = sorted(articles, key=lambda a: a.published_at, reverse=True)[:10]
     combined = "\n\n".join(
-        f"{a.title}. {a.summary or ''}"
+        f"{a.title}. {clean_text(a.summary)}"
         for a in recent
     )
 

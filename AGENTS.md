@@ -1,6 +1,6 @@
 # Chronicle AI — Knowledge Base
 
-**Generated:** 2026-04-26 | **Branch:** main | **Commit:** 4a3df41
+**Generated:** 2026-04-26 | **Branch:** main | **Commit:** 7dbb5ba
 
 ## Overview
 
@@ -128,6 +128,7 @@ No circular dependencies. Base lives in `cluster.py` — all models import from 
 - **Docker Model Runner (DMR)**: Works on Docker Desktop (implicit networking) or Docker Engine (`docker-model-plugin` package, port 12434, `extra_hosts` in compose). Models run on host, not in backend container. Config in `config.py` (llm_base_url, embedding_base_url)
 - **DMR cold start**: First request loads model into memory (5-15s). Rapid pipeline requests during cold start cause LLM fallback to LexRank/TF-IDF
 - **Llama 3.2 1B JSON compliance**: 1B model sometimes parrots prompt examples or outputs malformed JSON. `llm.py` has regex fallback parsing and rejects template values
+- **GDELT API quirks**: Returns HTML error pages for some queries (causes JSON parse failure). `sourcelang:english` filter is unreliable — post-fetch language filtering required. Rate limited at ~1 req/s. Query must be URL-encoded via `quote_plus`
 
 ## Commands
 
@@ -182,3 +183,4 @@ All implementation decisions flow from `prompt.md`. When in doubt, check the spe
 | 2026-04-26 | LLM | Docker Model Runner integration: llm.py service (DMR + Groq dual-provider), LLM coherence gate, LLM topic labels, LLM commit summaries, dense embeddings via qwen3 | llm.py, clustering.py, summarization.py, config.py, docker-compose.yml, requirements.txt |
 | 2026-04-26 | DMR Setup | Docker Engine DMR config: port 12434, extra_hosts networking, prompt hardening for Llama 3.2 1B JSON compliance | config.py, docker-compose.yml, .env.example, llm.py |
 | 2026-04-26 | GDELT | GDELT Doc API historical backfill (20 days, English), asyncio.gather parallel LLM calls, prompt caching, DMR thread tuning (8 threads, batch 1024) | gdelt.py, clustering.py, llm.py, main.py, ingest.py |
+| 2026-04-26 | GDELT Fix | GDELT backfill creates Article rows (source_urls populated), LLM search query generation, post-fetch English filter, URL encoding, cache invalidation after backfill | gdelt.py, main.py |

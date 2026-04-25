@@ -50,9 +50,12 @@ class _HTMLStripper(HTMLParser):
 def clean_text(html_str: str | None) -> str:
     if not html_str:
         return ""
-    stripper = _HTMLStripper()
-    stripper.feed(html_str)
-    text = stripper.get_text()
+    try:
+        stripper = _HTMLStripper()
+        stripper.feed(html_str)
+        text = stripper.get_text()
+    except Exception:
+        text = html_str
     text = _NOISE_PATTERN.sub("", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -164,10 +167,10 @@ async def run_clustering(db: AsyncSession) -> int:
                 cluster_entities = set(best_cluster.entity_fingerprint or [])
                 cluster_entities.update(article.entities)
                 best_cluster.entity_fingerprint = list(cluster_entities)
-                best_cluster.last_article_at = max(
-                    article.published_at,
-                    best_cluster.last_article_at or article.published_at,
-                )
+                candidates = [t for t in (article.published_at, best_cluster.last_article_at) if t is not None]
+                if candidates:
+                    best_cluster.last_article_at = max(candidates)
+                best_cluster.updated_at = datetime.now(timezone.utc)
                 assigned_count += 1
             else:
                 unmatched.append(article)
@@ -213,9 +216,11 @@ async def run_clustering(db: AsyncSession) -> int:
 
                 new_clusters_count += 1
 
+    await db.flush()
+
     for cluster in existing_clusters:
-        all_articles = cluster.articles + [a for a in unclustered if a.cluster_id == cluster.id]
-        cluster.heat_score = calculate_heat(all_articles, cluster.commits)
+        await db.refresh(cluster, attribute_names=["articles", "commits"])
+        cluster.heat_score = calculate_heat(cluster.articles, cluster.commits)
 
     await db.commit()
 

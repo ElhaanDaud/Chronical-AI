@@ -1,9 +1,38 @@
-*.docx
+# Python
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+*$py.class
 *.egg-info/
+*.egg
+dist/
+build/
 .venv/
-.sisyphus/
+venv/
+.Python
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# Node (root level)
 node_modules/
 .next/
+
+# Agent / tooling
+.sisyphus/
+
+# Misc
+*.docx

@@ -28,21 +28,23 @@ _stories_cache: dict = {"data": None, "expires_at": datetime.min.replace(tzinfo=
 
 
 async def _fetch_stories(db: AsyncSession) -> list[StoryCard]:
+    article_count_subq = (
+        select(func.count())
+        .where(Article.cluster_id == Cluster.id)
+        .correlate(Cluster)
+        .scalar_subquery()
+    )
+
     result = await db.execute(
-        select(Cluster)
+        select(Cluster, article_count_subq.label("article_count"))
         .where(Cluster.state.in_(["active", "cooling"]))
         .order_by(Cluster.heat_score.desc())
         .options(selectinload(Cluster.commits))
     )
-    clusters = result.scalars().all()
+    rows = result.all()
 
     cards = []
-    for cluster in clusters:
-        article_count_result = await db.execute(
-            select(func.count()).select_from(Article).where(Article.cluster_id == cluster.id)
-        )
-        article_count = article_count_result.scalar_one()
-
+    for cluster, article_count in rows:
         latest_commit = None
         if cluster.commits:
             latest_commit = max(cluster.commits, key=lambda c: c.commit_date)

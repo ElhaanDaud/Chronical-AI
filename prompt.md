@@ -30,25 +30,36 @@
 │           ┌────────────────────────────────┐                   │
 │           │      INGESTION SERVICE         │                   │
 │           │  (APScheduler — every 30 min)  │                   │
-│           │  - feedparser                  │                   │
+│           │  - feedparser + HTML cleaning   │                   │
 │           │  - Dedup by URL hash           │                   │
 │           └────────────────┬───────────────┘                   │
 │                            ▼                                   │
 │           ┌────────────────────────────────┐                   │
 │           │     CLUSTERING SERVICE         │                   │
 │           │  (APScheduler — every 2 hrs)   │                   │
-│           │  1. TF-IDF vectorization       │                   │
+│           │  1. Dense embeddings (DMR) or  │                   │
+│           │     TF-IDF vectorization       │                   │
 │           │  2. KMeans clustering          │                   │
-│           │  3. spaCy NER (en_core_web_sm) │                   │
-│           │  4. Heat score calculation      │                   │
+│           │  3. LLM coherence gate         │                   │
+│           │  4. spaCy NER (en_core_web_sm) │                   │
+│           │  5. Heat score + commit momentum│                   │
 │           └────────────────┬───────────────┘                   │
 │                            ▼                                   │
 │           ┌────────────────────────────────┐                   │
 │           │    SUMMARIZATION SERVICE       │                   │
 │           │  (Triggered on cluster update) │                   │
-│           │  - LexRank extractive summary  │                   │
-│           │  - Keyword-based topic labels  │                   │
+│           │  - LLM commit summaries (DMR/  │                   │
+│           │    Groq) w/ LexRank fallback   │                   │
+│           │  - LLM topic labels            │                   │
 │           └────────────────┬───────────────┘                   │
+│                            ▼                                   │
+│  ┌──────────────────────────────────────────────────┐         │
+│  │             LLM LAYER (host-side)                │         │
+│  │  Docker Model Runner:                            │         │
+│  │    ai/llama3.2:1B-Q4_0 (judge/labels/summaries) │         │
+│  │    ai/qwen3-embedding:0.6B-F16 (embeddings)     │         │
+│  │  Fallback: Groq API (llama-3.1-8b-instant)      │         │
+│  └──────────────────────────────────────────────────┘         │
 │                            ▼                                   │
 │           ┌────────────────────────────────┐                   │
 │           │         PostgreSQL             │                   │
@@ -73,11 +84,10 @@
 ```
 
 **Key simplifications vs. the original design:**
-- **No Celery/Redis** — APScheduler runs in-process within FastAPI. At <500 users, a separate task queue is unnecessary operational complexity.
-- **No pgvector/embeddings** — TF-IDF + KMeans replaces SBERT + HDBSCAN. Fits in <50 MB RAM vs. 600 MB+ for transformer models.
-- **No Ollama/LLM** — Extractive summarization (LexRank) + templates replace Mistral 7B. Zero GPU/8GB RAM requirement.
+- **No Celery/Redis** — APScheduler runs in-process within FastAPI. At <500 users, a single async loop handles it. Celery becomes justified when you need distributed workers or >1 process.
+- **No pgvector/embeddings in DB** — Dense embeddings computed at clustering time via Docker Model Runner (ai/qwen3-embedding:0.6B-F16). Falls back to TF-IDF when DMR unavailable. No embedding storage in PostgreSQL.
+- **LLM via Docker Model Runner / Groq API** — ai/llama3.2:1B-Q4_0 runs host-side via Docker Model Runner (OpenAI-compatible API). Groq API (llama-3.1-8b-instant) as fallback. LLM used for topic labels, coherence scoring, and commit summaries. LexRank retained as fallback when both LLM providers fail.
 - **No GDELT/NewsAPI** — RSS-only for MVP. GDELT adds a client library, GKG parsing, and rate-limit management for marginal gain. Add post-MVP.
-- **No BERTopic** — Simple TF-IDF keyword extraction for topic labels. BERTopic re-fits on every call — expensive and unnecessary.
 - **Single backend** — FastAPI is the sole backend. Next.js handles rendering only (no API routes). One data path, no confusion.
 
 ---
@@ -175,10 +185,11 @@ CREATE TRIGGER trg_articles_search
 | Source | URL | Priority |
 |--------|-----|----------|
 | BBC World | `http://feeds.bbci.co.uk/news/world/rss.xml` | 1 |
-| Reuters World | `https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best` | 1 |
-| AP News | `https://feeds.apnews.com/apnews/topnews` | 1 |
-| The Hindu | `https://www.thehindu.com/news/feeds/default/rssfeed.xml` | 2 |
-| NDTV | `https://feeds.ndtv.com/ndrss/news` | 2 |
+| Reuters | `https://www.reutersbest.com/feed/` | 1 |
+| The Hindu | `https://www.thehindu.com/feeder/default.rss` | 2 |
+| NDTV | `https://feeds.feedburner.com/ndtvnews-top-stories` | 2 |
+| NPR | `https://feeds.npr.org/1001/rss.xml` | 1 |
+| Al Jazeera | `https://www.aljazeera.com/xml/rss/all.xml` | 1 |
 
 #### Implementation
 
@@ -189,15 +200,22 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 RSS_FEEDS = [
     {"name": "BBC World", "url": "http://feeds.bbci.co.uk/news/world/rss.xml"},
-    {"name": "Reuters", "url": "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best"},
-    {"name": "AP News", "url": "https://feeds.apnews.com/apnews/topnews"},
-    {"name": "The Hindu", "url": "https://www.thehindu.com/news/feeds/default/rssfeed.xml"},
-    {"name": "NDTV", "url": "https://feeds.ndtv.com/ndrss/news"},
+    {"name": "Reuters", "url": "https://www.reutersbest.com/feed/"},
+    {"name": "The Hindu", "url": "https://www.thehindu.com/feeder/default.rss"},
+    {"name": "NDTV", "url": "https://feeds.feedburner.com/ndtvnews-top-stories"},
+    {"name": "NPR", "url": "https://feeds.npr.org/1001/rss.xml"},
+    {"name": "Al Jazeera", "url": "https://www.aljazeera.com/xml/rss/all.xml"},
 ]
 
 def normalize_url(url: str) -> str:
-    """Strip query params and trailing slash, lowercase."""
-    return url.split('?')[0].rstrip('/').lower()
+    """Normalize URL: lowercase, strip fragment, preserve query params."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url.strip())
+    normalized = urlunparse((
+        parsed.scheme.lower(), parsed.netloc.lower(),
+        parsed.path.rstrip('/'), parsed.params, parsed.query, ''
+    ))
+    return normalized
 
 def url_hash(url: str) -> str:
     return hashlib.sha256(normalize_url(url).encode()).hexdigest()
@@ -255,9 +273,9 @@ app = FastAPI(lifespan=lifespan)
 
 ### 2. Clustering Service
 
-**Objective**: Group related articles into story clusters using lightweight NLP.
+**Objective**: Group related articles into story clusters using dense embeddings + LLM coherence validation, with TF-IDF fallback.
 
-#### TF-IDF + KMeans Pipeline
+#### Hybrid Clustering Pipeline (Dense Embeddings + TF-IDF + LLM)
 
 ```python
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -266,93 +284,74 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
 # Configuration
-MIN_ARTICLES_TO_CLUSTER = 3       # Minimum articles to form a cluster (relaxed from 5)
+MIN_ARTICLES_TO_CLUSTER = 3       # Minimum articles to form a cluster
 MAX_CLUSTERS = 25                  # Cap on active clusters
-SIMILARITY_THRESHOLD = 0.3        # Minimum cosine sim to assign to existing cluster
+SIMILARITY_THRESHOLD = 0.55       # Minimum similarity to assign to existing cluster (raised from 0.3)
+COHERENCE_THRESHOLD = 0.4         # Minimum LLM coherence score for new clusters
 
-def cluster_articles(unclustered_articles: list[Article], existing_clusters: list[Cluster]):
+async def cluster_articles(unclustered_articles, existing_clusters, db):
     """
-    Two-pass clustering:
-    1. Try to assign each article to an existing cluster (cosine sim on TF-IDF)
+    Two-pass clustering with LLM coherence gate:
+    1. Try to assign each article to an existing cluster (dense embeddings or TF-IDF cosine sim)
     2. Cluster remaining articles into new groups via KMeans
+    3. LLM coherence gate rejects incoherent clusters
     """
-    if not unclustered_articles:
-        return
+    # HTML cleaning applied to all text inputs before vectorization
+    # clean_text() strips HTML tags, scripts, URLs, and collapses whitespace
 
     # === Pass 1: Match against existing clusters ===
-    if existing_clusters:
-        # Build TF-IDF from existing cluster articles + unclustered
-        all_texts = []
-        cluster_text_map = {}
+    # Try dense embeddings via Docker Model Runner first
+    # Falls back to TF-IDF if embeddings unavailable
+    try:
+        from app.services.llm import get_embeddings
+        embeddings = await get_embeddings(all_texts)
+        # Use cosine_similarity on dense vectors
+    except Exception:
+        # Fallback: TF-IDF vectorization
+        vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+        tfidf_matrix = vectorizer.fit_transform(all_texts)
 
-        for cluster in existing_clusters:
-            cluster_texts = [f"{a.title} {a.summary}" for a in cluster.articles[-20:]]
-            combined = " ".join(cluster_texts)
-            cluster_text_map[cluster.id] = len(all_texts)
-            all_texts.append(combined)
-
-        unmatched = []
-        for article in unclustered_articles:
-            article_text = f"{article.title} {article.summary}"
-            all_texts_with_article = all_texts + [article_text]
-
-            vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
-            tfidf_matrix = vectorizer.fit_transform(all_texts_with_article)
-
-            article_vec = tfidf_matrix[-1]
-            cluster_vecs = tfidf_matrix[:-1]
-
-            sims = cosine_similarity(article_vec, cluster_vecs).flatten()
-            best_idx = np.argmax(sims)
-
-            if sims[best_idx] >= SIMILARITY_THRESHOLD:
-                best_cluster_id = list(cluster_text_map.keys())[best_idx]
-                article.cluster_id = best_cluster_id
-            else:
-                unmatched.append(article)
-    else:
-        unmatched = unclustered_articles
+    # Combined score: 0.7 * cosine_sim + 0.3 * entity_overlap
+    # Assign if combined_score >= SIMILARITY_THRESHOLD (0.55)
 
     # === Pass 2: Cluster unmatched into new groups ===
-    if len(unmatched) >= MIN_ARTICLES_TO_CLUSTER:
-        texts = [f"{a.title} {a.summary}" for a in unmatched]
-        vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
-        tfidf = vectorizer.fit_transform(texts)
+    # MiniBatchKMeans(batch_size=100) on unmatched articles
+    # Each new cluster scored by LLM coherence gate
 
-        n_clusters = min(len(unmatched) // MIN_ARTICLES_TO_CLUSTER, MAX_CLUSTERS)
-        n_clusters = max(n_clusters, 1)
-
-        kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42, batch_size=100)
-        labels = kmeans.fit_predict(tfidf)
-
-        # Create new clusters from groups
-        for label in set(labels):
-            group = [unmatched[i] for i, l in enumerate(labels) if l == label]
-            if len(group) >= MIN_ARTICLES_TO_CLUSTER:
-                topic_label = extract_topic_label(group, vectorizer, tfidf, labels, label)
-                new_cluster = Cluster(topic_label=topic_label)
-                for article in group:
-                    article.cluster_id = new_cluster.id
+    # === LLM Coherence Gate ===
+    for new_cluster in candidate_clusters:
+        score = await score_coherence(cluster_article_titles)
+        if score < COHERENCE_THRESHOLD:
+            # Reject: unassign articles, leave unclustered
+            continue
+        # Accept: generate LLM topic label
+        topic_label = await generate_topic_label(cluster_article_titles)
 ```
 
-**Why TF-IDF + KMeans over SBERT + HDBSCAN:**
-- **Memory**: TF-IDF is computed on-the-fly, no model to load. SBERT (`all-MiniLM-L6-v2`) needs ~100 MB resident.
-- **Cold start**: KMeans works with `min_cluster_size=3` (relaxed from HDBSCAN's 5). On day 1 with limited articles, clusters form faster.
-- **Simplicity**: scikit-learn is a standard dependency with no GPU requirements.
-- **Trade-off**: Lower semantic quality — TF-IDF is bag-of-words, misses paraphrases. Acceptable for MVP with news headlines (high term overlap naturally).
+**Why dense embeddings + TF-IDF hybrid:**
+- **Dense embeddings** (Qwen3 0.6B via DMR) capture semantic similarity that TF-IDF misses (paraphrases, synonyms).
+- **TF-IDF fallback** ensures clustering works even without Docker Model Runner running.
+- **LLM coherence gate** prevents garbage clusters — rejects groups with low semantic coherence.
+- **Memory**: Embeddings computed on-the-fly via API call (not resident in RAM). Backend stays under 512 MB.
 
-#### Topic Label Extraction
+#### Topic Label Generation (LLM with TF-IDF Fallback)
 
 ```python
-def extract_topic_label(articles: list[Article], vectorizer, tfidf_matrix, labels, target_label) -> str:
-    """Extract top TF-IDF keywords as a topic label."""
+async def generate_topic_label(article_titles: list[str]) -> str:
+    """Generate a concise topic label via LLM. Falls back to TF-IDF keywords."""
+    try:
+        from app.services.llm import generate_topic_label as llm_label
+        return await llm_label(article_titles)
+    except Exception:
+        return _tfidf_topic_label(articles, vectorizer, tfidf_matrix, labels, target_label)
+
+def _tfidf_topic_label(articles, vectorizer, tfidf_matrix, labels, target_label) -> str:
+    """Fallback: Extract top TF-IDF keywords as a topic label."""
     cluster_indices = [i for i, l in enumerate(labels) if l == target_label]
     cluster_tfidf = tfidf_matrix[cluster_indices].mean(axis=0).A1
-
     feature_names = vectorizer.get_feature_names_out()
     top_indices = cluster_tfidf.argsort()[-4:][::-1]
     keywords = [feature_names[i] for i in top_indices]
-
     return " — ".join(keywords).title()
 ```
 
@@ -392,13 +391,20 @@ from datetime import datetime, timezone
 
 DECAY_LAMBDA = 0.15  # Faster decay than original (0.1) — news cycles are short
 
-def calculate_heat(articles: list[Article]) -> float:
-    """H(t) = Σ e^(-λ × Δt) where Δt is days since publication."""
+def calculate_heat(articles: list[Article], commits: list[Commit] = None) -> float:
+    """
+    H(t) = Σ e^(-λ × Δt) + 0.5 × recent_commits
+    where Δt is days since publication, recent_commits = commits in last 10 days.
+    """
     now = datetime.now(timezone.utc)
     score = 0.0
     for article in articles:
         delta_days = (now - article.published_at).total_seconds() / 86400
         score += math.exp(-DECAY_LAMBDA * delta_days)
+    if commits:
+        cutoff = now - timedelta(days=10)
+        recent = sum(1 for c in commits if c.commit_date >= cutoff)
+        score += 0.5 * recent
     return round(score, 2)
 ```
 
@@ -427,24 +433,36 @@ def calculate_heat(articles: list[Article]) -> float:
 
 ### 4. Summarization Service
 
-#### LexRank for Commit Messages
+#### LLM Commit Messages (with LexRank Fallback)
 
 ```python
-from sumy.parsers.plaintext import PlaintextParser
-from sumy.nlp.tokenizers import Tokenizer
-from sumy.summarizers.lex_rank import LexRankSummarizer
-from sumy.nlp.stemmers import Stemmer
-from sumy.utils import get_stop_words
-
-def generate_commit(articles: list[Article]) -> tuple[str, str]:
+async def generate_commit(articles: list[Article], topic_label: str = "") -> tuple[str, str]:
     """
-    Generate:
+    Generate commit message + detail via LLM. Falls back to LexRank.
     - message: One-line summary (≤150 chars)
     - detail: Three-sentence expansion
     """
+    try:
+        from app.services.llm import generate_commit_summary
+        titles = [a.title for a in articles[-10:]]
+        summaries = [a.summary or '' for a in articles[-10:]]
+        message, detail = await generate_commit_summary(topic_label, titles, summaries)
+        return message[:150], detail
+    except Exception:
+        return _lexrank_commit(articles)
+
+def _lexrank_commit(articles: list[Article]) -> tuple[str, str]:
+    """Fallback: LexRank extractive summarization via sumy."""
+    from sumy.parsers.plaintext import PlaintextParser
+    from sumy.nlp.tokenizers import Tokenizer
+    from sumy.summarizers.lex_rank import LexRankSummarizer
+    from sumy.nlp.stemmers import Stemmer
+    from sumy.utils import get_stop_words
+    from app.services.clustering import clean_text
+
     combined = "\n\n".join(
-        f"{a.title}. {a.summary or ''}"
-        for a in articles[-10:]  # Last 10 articles for recency
+        f"{a.title}. {clean_text(a.summary or '')}"
+        for a in articles[-10:]
     )
 
     parser = PlaintextParser.from_string(combined, Tokenizer("english"))
@@ -457,6 +475,8 @@ def generate_commit(articles: list[Article]) -> tuple[str, str]:
 
     return message, detail
 ```
+
+**Commit generation threshold**: >=1 new article per cluster (lowered from >=2 to generate commits more frequently).
 
 ### 5. Catch Me Up Feature (Template-Based)
 
@@ -498,13 +518,11 @@ def generate_catchup(cluster: Cluster, commits: list[Commit]) -> str:
     return narrative
 ```
 
-**Why templates over LLM:**
-- Mistral 7B (quantized) needs ~4–8 GB RAM — impossible on Railway free tier (512 MB).
-- Ollama itself is an additional service to deploy and manage.
-- Template output is deterministic, fast (<10 ms), and never hallucinates.
-- Trade-off: Less fluid prose. For an MVP targeting 3–5 minute catch-ups, structured bullet points are arguably better than LLM prose anyway.
-
-**Post-MVP upgrade path**: When you have budget for a GPU instance or an API key (OpenAI/Anthropic), swap `generate_catchup()` with an LLM call. The interface stays the same.
+**Why templates for catch-up (not LLM):**
+- Catch-up narratives are structural (opening → key moments → closing). Templates handle this deterministically.
+- LLM is used for commit messages and topic labels where semantic understanding matters.
+- Template output is fast (<10 ms) and never hallucinates.
+- LLM catch-up generation can be added as a future enhancement with the same interface.
 
 ---
 
@@ -520,6 +538,7 @@ def generate_catchup(cluster: Cluster, commits: list[Commit]) -> str:
 | `GET` | `/api/stories/{id}/catchup` | Get catch-up narrative (GET, not POST — no state change) |
 | `GET` | `/api/search?q=` | Full-text search across articles |
 | `GET` | `/api/health` | Health check + last ingestion timestamp |
+| `POST` | `/api/ingest` | Manual ingestion trigger (?full_pipeline=true for full cycle) |
 
 ### Response Schemas
 
@@ -531,6 +550,7 @@ from uuid import UUID
 class StoryCard(BaseModel):
     id: UUID
     topic_label: str
+    topic_tokens: list[str]           # Derived from topic_label split on " — "
     latest_commit_message: str
     heat_score: float
     state: str
@@ -540,6 +560,7 @@ class StoryCard(BaseModel):
 class StoryDetail(BaseModel):
     id: UUID
     topic_label: str
+    topic_tokens: list[str]           # Derived from topic_label split on " — "
     state: str
     heat_score: float
     article_count: int
@@ -611,7 +632,7 @@ app.add_middleware(
         "http://localhost:3000",          # Dev
         "https://chronicle-ai.vercel.app" # Prod (update with actual domain)
     ],
-    allow_methods=["GET"],                # Read-only API for MVP
+    allow_methods=["GET", "POST"],            # GET for reads + POST for manual ingest
     allow_headers=["*"],
 )
 
@@ -819,20 +840,27 @@ async def cleanup_old_articles(db: AsyncSession):
 ### Environment Variables
 
 ```bash
-# .env
+# .env (backend)
 DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/chronicle
 FRONTEND_URL=http://localhost:3000
+
+# LLM Configuration
+GROQ_API_KEY=gsk_...                    # Required if LLM_PROVIDER=groq
+LLM_PROVIDER=groq                       # "groq" or "dmr"
+LLM_MODEL=ai/llama3.2:1B-Q4_0          # Docker Model Runner model
+LLM_BASE_URL=http://model-runner.docker.internal/engines/v1
+EMBEDDING_MODEL=ai/qwen3-embedding:0.6B-F16
+EMBEDDING_BASE_URL=http://model-runner.docker.internal/engines/llama.cpp/v1
 
 # Production overrides
 # DATABASE_URL=postgresql+asyncpg://...@railway/chronicle
 # FRONTEND_URL=https://chronicle-ai.vercel.app
+# LLM_PROVIDER=groq  # Railway doesn't have Docker Model Runner
 ```
 
 ### Docker Compose (Development)
 
 ```yaml
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -844,16 +872,28 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chronicle -d chronicle"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   backend:
     build: ./backend
     ports:
       - "8000:8000"
+    env_file:
+      - ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://chronicle:chronicle_dev@postgres:5432/chronicle
       FRONTEND_URL: http://localhost:3000
+      LLM_MODEL: ai/llama3.2:1B-Q4_0
+      LLM_BASE_URL: http://model-runner.docker.internal/engines/v1
+      EMBEDDING_MODEL: ai/qwen3-embedding:0.6B-F16
+      EMBEDDING_BASE_URL: http://model-runner.docker.internal/engines/llama.cpp/v1
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     volumes:
       - ./backend:/app
 
@@ -863,6 +903,7 @@ services:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      API_URL: http://backend:8000
     depends_on:
       - backend
 
@@ -870,7 +911,7 @@ volumes:
   pgdata:
 ```
 
-**Removed**: Redis service (no Celery), pgvector image (standard Postgres).
+**Notes**: `env_file: ./backend/.env` loads GROQ_API_KEY and other secrets. `environment:` block provides Docker-specific overrides (DB URL, DMR endpoints). Docker Model Runner is accessed via `model-runner.docker.internal` (host-side service).
 
 ### Production Deployment
 
@@ -880,7 +921,7 @@ volumes:
 | Frontend (Next.js) | Vercel | 100 GB bandwidth |
 | Database (PostgreSQL) | Railway | 1 GB storage |
 
-**Total services: 3** (down from 5 in original: backend, frontend, postgres, ~~redis~~, ~~ollama~~).
+**Total services: 3** (down from 5 in original: backend, frontend, postgres, ~~redis~~, ~~ollama~~). LLM runs via Groq API in production (Docker Model Runner not available on Railway).
 
 ### Backend Dockerfile
 
@@ -934,12 +975,15 @@ async def log_requests(request: Request, call_next):
 - [ ] Docker Compose for local dev
 
 ### Phase 2: Clustering + Summaries (Weeks 3–4)
-- [ ] TF-IDF + KMeans clustering pipeline
+- [ ] Dense embeddings via Docker Model Runner (Qwen3 0.6B)
+- [ ] TF-IDF + KMeans clustering pipeline with raised threshold (0.55)
+- [ ] LLM coherence gate for cluster quality validation
+- [ ] LLM-generated topic labels (with TF-IDF fallback)
 - [ ] spaCy NER entity extraction (`en_core_web_sm`)
 - [ ] Entity fingerprint for cross-temporal linking
-- [ ] Heat score calculation + state transitions
-- [ ] LexRank commit generation (sumy)
-- [ ] Topic label extraction from TF-IDF keywords
+- [ ] Heat score calculation with commit momentum + state transitions
+- [ ] LLM commit message generation (with LexRank fallback)
+- [ ] Docker Model Runner + Groq API dual-provider LLM client
 
 ### Phase 3: API + Frontend (Weeks 5–7)
 - [ ] All REST endpoints with error handling
@@ -965,24 +1009,25 @@ async def log_requests(request: Request, call_next):
 ## Acceptance Criteria (MVP)
 
 ### Must Have
-- [ ] 5 RSS feeds ingested every 30 min without errors
+- [ ] 6 RSS feeds ingested every 30 min without errors
 - [ ] Articles deduplicated by URL hash
-- [ ] TF-IDF + KMeans produces 10–20 meaningful clusters
+- [ ] Dense embeddings + TF-IDF hybrid produces meaningful clusters with LLM coherence gate
 - [ ] NER entity fingerprint links articles across days/weeks
-- [ ] Heat score correctly transitions cluster states
-- [ ] LexRank generates readable one-line commit messages + 3-sentence details
-- [ ] Dashboard displays active topics sorted by heat
+- [ ] Heat score (with commit momentum) correctly transitions cluster states
+- [ ] LLM generates readable topic labels and commit messages (LexRank fallback)
+- [ ] Dashboard displays active topics sorted by heat with topic token chips
 - [ ] Story detail shows chronological commit log with source attribution
 - [ ] Catch Me Up generates structured narrative from commits
 - [ ] Full-text search works across articles
 - [ ] Mobile-responsive layout
 - [ ] Deploys on Railway + Vercel free tier
 - [ ] Handles <500 concurrent users without crashing
+- [ ] LLM failover works: DMR → Groq (or vice versa) → TF-IDF/LexRank
 
 ### Post-MVP Roadmap (not in scope)
 - [ ] GDELT 2.0 integration for broader coverage
-- [ ] SBERT embeddings + HDBSCAN for higher-quality clustering
-- [ ] LLM-based Catch Me Up (OpenAI API or self-hosted)
+- [ ] HDBSCAN for density-based clustering
+- [ ] LLM-based Catch Me Up narratives
 - [ ] User accounts + follow/notify system
 - [ ] Story branching (parent/child clusters)
 - [ ] Sentiment analysis (VADER) with UI
@@ -997,11 +1042,12 @@ async def log_requests(request: Request, call_next):
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| TF-IDF clustering quality on live data | Medium | Tune `SIMILARITY_THRESHOLD` and `MIN_ARTICLES_TO_CLUSTER`. Add manual override for mislabeled clusters. Seed initial clusters from a curated list of active topics. |
+| LLM provider downtime (DMR/Groq) | Medium | Dual-provider failover chain. Full TF-IDF + LexRank fallback if both fail. |
+| Clustering quality on diverse sources | Medium | LLM coherence gate rejects incoherent clusters (threshold 0.4). Raised similarity threshold to 0.55. Dense embeddings improve semantic matching. |
 | RSS feed downtime/format changes | Medium | Graceful per-feed error handling. Log failures. Remaining feeds continue. |
-| Railway free-tier RAM limits | High | Profile memory usage. Batch clustering. Use `en_core_web_sm` (15 MB) not `en_core_web_trf` (500 MB). |
-| Cold-start: no clusters on day 1 | Medium | Pre-seed with manually curated clusters for 5–10 major ongoing stories. |
-| LexRank summary quality | Low | Extractive methods work well on news text. Fallback: use article title as commit message. |
+| Railway free-tier RAM limits | High | Profile memory usage. LLM runs outside container (DMR or API). Use `en_core_web_sm` (15 MB) not `en_core_web_trf` (500 MB). |
+| Cold-start: no clusters on day 1 | Medium | Lowered commit threshold from >=2 to >=1. KMeans forms clusters from first ingestion cycle. |
+| Groq API rate limits | Low | Free tier: 30 RPM. Clustering processes 5-25 clusters per cycle. Well within limits. |
 | Single-process scheduler reliability | Medium | APScheduler persists missed jobs. Add last-run timestamp to health check. |
 
 ---
@@ -1032,6 +1078,10 @@ nltk>=3.8.0
 # Clustering
 scikit-learn>=1.4.0
 
+# LLM (Docker Model Runner + Groq API)
+openai>=1.12.0
+numpy>=1.26.0
+
 # Rate limiting
 slowapi>=0.1.9
 
@@ -1042,7 +1092,7 @@ pydantic-settings>=2.1.0
 httpx>=0.27.0
 ```
 
-**What was removed**: `sentence-transformers`, `hdbscan`, `bertopic`, `ollama`, `celery`, `redis`, `pgvector`, `vaderSentiment`. Total dependency footprint dropped by ~60%.
+**What was removed**: `sentence-transformers`, `hdbscan`, `bertopic`, `ollama`, `celery`, `redis`, `pgvector`, `vaderSentiment`. **Added**: `openai` (OpenAI-compatible client for DMR + Groq), `numpy`.
 
 ---
 
@@ -1054,7 +1104,7 @@ chronical-ai/
 │   ├── app/
 │   │   ├── __init__.py
 │   │   ├── main.py                  # FastAPI app + lifespan + scheduler
-│   │   ├── config.py                # Pydantic Settings
+│   │   ├── config.py                # Pydantic Settings (DB, LLM, embedding config)
 │   │   ├── models/
 │   │   │   ├── __init__.py
 │   │   │   ├── article.py
@@ -1062,38 +1112,56 @@ chronical-ai/
 │   │   │   └── commit.py
 │   │   ├── schemas/
 │   │   │   ├── __init__.py
-│   │   │   ├── story.py
-│   │   │   └── commit.py
+│   │   │   ├── story.py             # StoryCard, StoryDetail, CommitResponse, CatchUpResponse
+│   │   │   └── common.py            # HealthResponse, ErrorResponse
 │   │   ├── api/
 │   │   │   ├── __init__.py
 │   │   │   ├── stories.py
 │   │   │   ├── search.py
-│   │   │   └── health.py
+│   │   │   ├── health.py
+│   │   │   └── ingest.py            # Manual ingestion trigger
 │   │   ├── services/
 │   │   │   ├── __init__.py
-│   │   │   ├── ingestion.py         # RSS fetching
-│   │   │   ├── clustering.py        # TF-IDF + KMeans
-│   │   │   ├── summarization.py     # LexRank + catchup templates
-│   │   │   └── lifecycle.py         # Heat score + state machine
+│   │   │   ├── ingestion.py         # RSS fetching + HTML cleaning
+│   │   │   ├── clustering.py        # Dense embeddings / TF-IDF + KMeans + LLM coherence gate
+│   │   │   ├── summarization.py     # LLM commit summaries + LexRank fallback
+│   │   │   ├── lifecycle.py         # Heat score (with commit momentum) + state machine
+│   │   │   ├── cleanup.py           # Data retention (30-day prune)
+│   │   │   └── llm.py               # LLM client (Docker Model Runner + Groq fallback)
 │   │   └── core/
 │   │       ├── __init__.py
 │   │       ├── database.py          # Async engine + session
-│   │       └── logging.py           # Logger config
+│   │       ├── logging.py           # Logger config
+│   │       └── limiter.py           # Shared rate limiter
 │   ├── alembic/                     # DB migrations
 │   ├── alembic.ini
 │   ├── requirements.txt
-│   └── Dockerfile
+│   ├── Dockerfile
+│   └── railway.toml                 # Railway deployment config
 ├── frontend/
 │   ├── src/
 │   │   ├── app/
+│   │   │   ├── page.tsx             # Dashboard
+│   │   │   ├── layout.tsx           # Root layout + navbar
+│   │   │   ├── story/[id]/page.tsx  # Story detail + catch-up
+│   │   │   └── search/page.tsx      # Search results
 │   │   ├── components/
-│   │   ├── lib/
-│   │   └── styles/
+│   │   │   ├── ui/                  # shadcn/ui components
+│   │   │   ├── story-card.tsx       # Topic token chips + heat badge
+│   │   │   ├── commit-log.tsx       # Git-style commit timeline
+│   │   │   ├── catch-up-panel.tsx   # Catch-up narrative display
+│   │   │   ├── heat-badge.tsx       # Heat score indicator
+│   │   │   ├── search-bar.tsx       # Full-text search
+│   │   │   └── navbar.tsx           # Top navigation
+│   │   └── lib/
+│   │       ├── api.ts               # Typed fetch wrapper for FastAPI
+│   │       └── utils.ts             # Date formatting, cn()
 │   ├── package.json
 │   ├── tailwind.config.ts
 │   ├── tsconfig.json
-│   ├── next.config.js
-│   └── Dockerfile
+│   ├── next.config.mjs
+│   ├── Dockerfile                   # Multi-stage node:20-alpine
+│   └── vercel.json                  # Vercel deployment config
 ├── docker-compose.yml
 ├── .env.example
 ├── .gitignore

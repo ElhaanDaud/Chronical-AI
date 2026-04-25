@@ -2,7 +2,7 @@
 
 News aggregation pipeline that tracks evolving stories as git-style commit logs.
 
-RSS feeds → TF-IDF/KMeans clustering → spaCy NER entity linking → LexRank summarization → PostgreSQL → FastAPI → Next.js 14
+RSS feeds → TF-IDF + dense embeddings clustering → LLM coherence gate → LLM-generated summaries → PostgreSQL → FastAPI → Next.js 14
 
 ## Architecture
 
@@ -11,12 +11,17 @@ RSS feeds → TF-IDF/KMeans clustering → spaCy NER entity linking → LexRank 
 | Backend | FastAPI + APScheduler | REST API, ingestion, clustering, summarization |
 | Frontend | Next.js 14, Tailwind, shadcn/ui | Dashboard, story detail, search |
 | Database | PostgreSQL 16 | Articles, clusters, commits, full-text search |
+| LLM (primary) | Docker Model Runner (ai/llama3.2:1B-Q4_0) | Topic labels, coherence scoring, commit summaries |
+| Embeddings | Docker Model Runner (ai/qwen3-embedding:0.6B-F16) | Dense semantic similarity for clustering |
+| LLM (fallback) | Groq API (llama-3.1-8b-instant) | Fallback when DMR unavailable |
 
-Single process. No Celery, no Redis, no external AI APIs.
+Single process. No Celery, no Redis. LLM runs via Docker Model Runner (host-side) or Groq API — not inside the backend container.
 
 ## Prerequisites
 
 - Docker + Docker Compose
+- Docker Desktop with Model Runner enabled (for local LLM — optional, falls back to Groq)
+- Groq API key (free tier at https://console.groq.com) — required if not using Docker Model Runner
 - Node.js 20+ (only for frontend development outside Docker)
 
 ## Quick Start
@@ -32,6 +37,17 @@ docker compose up --build
 ```
 
 Migrations run automatically on backend startup.
+
+## Environment Setup
+
+Copy `.env.example` to `backend/.env` and fill in your Groq API key:
+
+```bash
+cp .env.example backend/.env
+# Edit backend/.env — set GROQ_API_KEY=gsk_...
+```
+
+If using Docker Model Runner, set `LLM_PROVIDER=dmr` in `.env`. Otherwise keep `LLM_PROVIDER=groq` (default).
 
 ## Running Commands
 
@@ -164,6 +180,12 @@ The backend runs migrations on startup (`alembic upgrade head`) before starting 
 |----------|-------|----------|---------|
 | DATABASE_URL | Backend | Yes | localhost dev URL |
 | FRONTEND_URL | Backend | No | http://localhost:3000 |
+| GROQ_API_KEY | Backend | Yes (if LLM_PROVIDER=groq) | — |
+| LLM_PROVIDER | Backend | No | groq |
+| LLM_MODEL | Backend | No | ai/llama3.2:1B-Q4_0 |
+| LLM_BASE_URL | Backend | No | http://model-runner.docker.internal/engines/v1 |
+| EMBEDDING_MODEL | Backend | No | ai/qwen3-embedding:0.6B-F16 |
+| EMBEDDING_BASE_URL | Backend | No | http://model-runner.docker.internal/engines/llama.cpp/v1 |
 | NEXT_PUBLIC_API_URL | Frontend | Yes | http://localhost:8000 |
 | API_URL | Frontend | No | falls back to NEXT_PUBLIC_API_URL |
 
@@ -181,18 +203,23 @@ BBC World, Reuters, The Hindu, NDTV, NPR, Al Jazeera. Configured in `backend/app
 
 ## Clustering Pipeline
 
-1. **Pass 1**: Cosine similarity (TF-IDF) + Jaccard entity overlap against existing clusters. Threshold: 0.3
-2. **Pass 2**: MiniBatchKMeans on unmatched articles (min 3 articles per cluster, max 25 clusters)
-3. **NER**: spaCy `en_core_web_sm` extracts PERSON/ORG/GPE/EVENT entities
-4. **Heat score**: H(t) = Σ e^(-0.15 × Δt) — exponential decay per article age
-5. **States**: active (≥3.0) → cooling (≥1.0) → hibernated (<1.0 for 3+ days)
-6. **Summarization**: LexRank via sumy — 3-sentence extractive summary per commit
+1. **HTML cleaning**: Strip HTML tags, scripts, URLs from RSS content using stdlib HTMLParser
+2. **Pass 1**: Dense embeddings (Qwen3 0.6B via DMR) or TF-IDF cosine similarity + Jaccard entity overlap against existing clusters. Threshold: 0.55
+3. **Pass 2**: MiniBatchKMeans on unmatched articles (min 3 articles per cluster, max 25 clusters)
+4. **LLM coherence gate**: Each new cluster scored 0.0–1.0 by LLM. Rejected if below 0.4
+5. **Topic labels**: LLM-generated from article titles (fallback: TF-IDF top-4 keywords)
+6. **NER**: spaCy `en_core_web_sm` extracts PERSON/ORG/GPE/EVENT entities
+7. **Heat score**: H(t) = Σ e^(-0.15 × Δt) + 0.5 × commits_last_10_days
+8. **States**: active (≥3.0) → cooling (≥1.0) → hibernated (<1.0 for 3+ days)
+9. **Summarization**: LLM-generated commit messages and details (fallback: LexRank via sumy)
 
 ## Known Gotchas
 
 - **Alembic URL**: `alembic.ini` has localhost; `env.py` overrides with `settings.database_url` at runtime. Set `DATABASE_URL` env var when running migrations outside Docker.
 - **NLTK data**: `punkt_tab` tokenizer is downloaded at Docker build time. If missing, summarization fails silently.
 - **spaCy model**: `en_core_web_sm` (15 MB) is baked into the Docker image. Changing model requires rebuild.
-- **Railway RAM**: ≤512 MB. The `en_core_web_sm` model + TF-IDF vectorizer fit within limits. Do not use `en_core_web_trf` (500 MB).
+- **Railway RAM**: ≤512 MB. The `en_core_web_sm` model + TF-IDF vectorizer fit within limits. LLM runs outside the backend container (Docker Model Runner or Groq API). Do not use `en_core_web_trf` (500 MB).
 - **Docker network**: Server-side Next.js fetches use `API_URL=http://backend:8000` (Docker service name). Client-side uses `NEXT_PUBLIC_API_URL` (public URL).
+- **Docker Model Runner**: Requires Docker Desktop with Model Runner enabled. Models run on the host, not inside containers. Backend accesses via `http://model-runner.docker.internal`. Falls back to Groq if unavailable.
 - **RSS feed resilience**: Some feeds occasionally change format. Ingestion continues with remaining feeds — partial ingestion is by design.
+- **LLM fallback chain**: DMR primary → Groq fallback (or vice versa based on LLM_PROVIDER). If both fail, clustering uses TF-IDF labels and LexRank summaries.

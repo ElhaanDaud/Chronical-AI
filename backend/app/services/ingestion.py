@@ -1,6 +1,7 @@
 import hashlib
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlparse, urlunparse
 
 import feedparser
 from sqlalchemy import select
@@ -10,23 +11,33 @@ from app.core.logging import logger
 from app.models.article import Article
 
 RSS_FEEDS = [
-    {"name": "BBC World", "url": "http://feeds.bbci.co.uk/news/world/rss.xml"},
-    {"name": "Reuters", "url": "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best"},
-    {"name": "AP News", "url": "https://feeds.apnews.com/apnews/topnews"},
-    {"name": "The Hindu", "url": "https://www.thehindu.com/news/feeds/default/rssfeed.xml"},
-    {"name": "NDTV", "url": "https://feeds.ndtv.com/ndrss/news"},
+    {"name": "BBC World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
+    {"name": "Reuters", "url": "https://reutersbest.com/feed/"},
+    {"name": "The Hindu", "url": "https://www.thehindu.com/feeder/default.rss"},
+    {"name": "NDTV", "url": "https://feeds.feedburner.com/ndtvnews-top-stories"},
+    {"name": "NPR", "url": "https://feeds.npr.org/1001/rss.xml"},
+    {"name": "Al Jazeera", "url": "https://www.aljazeera.com/xml/rss/all.xml"},
 ]
 
 
 def normalize_url(url: str) -> str:
-    return url.split("?")[0].rstrip("/").lower()
+    parsed = urlparse(url)
+    normalized = urlunparse((
+        parsed.scheme.lower(),
+        parsed.netloc.lower(),
+        parsed.path.rstrip("/"),
+        parsed.params,
+        parsed.query,
+        "",
+    ))
+    return normalized
 
 
 def compute_url_hash(url: str) -> str:
     return hashlib.sha256(normalize_url(url).encode()).hexdigest()
 
 
-def parse_published_date(entry: dict) -> datetime:
+def parse_published_date(entry: dict) -> datetime | None:
     if hasattr(entry, "published_parsed") and entry.published_parsed:
         from time import mktime
         return datetime.fromtimestamp(mktime(entry.published_parsed), tz=timezone.utc)
@@ -37,7 +48,7 @@ def parse_published_date(entry: dict) -> datetime:
         except Exception:
             pass
 
-    return datetime.now(timezone.utc)
+    return None
 
 
 async def ingest_feeds(db: AsyncSession) -> int:
@@ -55,10 +66,14 @@ async def ingest_feeds(db: AsyncSession) -> int:
 
                 h = compute_url_hash(link)
                 exists = await db.execute(
-                    select(Article.id).where(Article.url_hash == h)
+                    select(Article.id).where(Article.url_hash == h).limit(1)
                 )
-                if exists.scalar_one_or_none():
+                if exists.first():
                     continue
+
+                published = parse_published_date(entry)
+                if published is None:
+                    published = datetime.now(timezone.utc)
 
                 article = Article(
                     url=link,
@@ -66,7 +81,7 @@ async def ingest_feeds(db: AsyncSession) -> int:
                     title=getattr(entry, "title", "Untitled"),
                     summary=getattr(entry, "summary", None),
                     source=feed_config["name"],
-                    published_at=parse_published_date(entry),
+                    published_at=published,
                 )
                 db.add(article)
                 new_in_feed += 1

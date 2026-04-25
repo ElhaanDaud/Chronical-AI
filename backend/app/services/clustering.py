@@ -84,30 +84,29 @@ async def run_clustering(db: AsyncSession) -> int:
     unmatched = []
 
     if existing_clusters:
-        cluster_text_map = {}
-        all_texts = []
-
+        cluster_texts = []
         for cluster in existing_clusters:
             recent_articles = sorted(cluster.articles, key=lambda a: a.published_at, reverse=True)[:20]
             combined = " ".join(f"{a.title} {a.summary or ''}" for a in recent_articles)
-            cluster_text_map[cluster.id] = len(all_texts)
-            all_texts.append(combined)
+            cluster_texts.append(combined)
 
-        for article in unclustered:
-            article_text = f"{article.title} {article.summary or ''}"
-            texts_with_article = all_texts + [article_text]
+        article_texts = [f"{a.title} {a.summary or ''}" for a in unclustered]
+        all_texts = cluster_texts + article_texts
 
-            vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
-            tfidf_matrix = vectorizer.fit_transform(texts_with_article)
+        vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
+        tfidf_matrix = vectorizer.fit_transform(all_texts)
 
-            article_vec = tfidf_matrix[-1]
-            cluster_vecs = tfidf_matrix[:-1]
+        cluster_vecs = tfidf_matrix[:len(existing_clusters)]
+        article_vecs = tfidf_matrix[len(existing_clusters):]
 
-            sims = cosine_similarity(article_vec, cluster_vecs).flatten()
+        sim_matrix = cosine_similarity(article_vecs, cluster_vecs)
+
+        for i, article in enumerate(unclustered):
+            sims = sim_matrix[i]
 
             entity_scores = np.array([
-                entity_overlap_score(article.entities, existing_clusters[i].entity_fingerprint or [])
-                for i in range(len(existing_clusters))
+                entity_overlap_score(article.entities, existing_clusters[j].entity_fingerprint or [])
+                for j in range(len(existing_clusters))
             ])
             combined_scores = 0.7 * sims + 0.3 * entity_scores
 

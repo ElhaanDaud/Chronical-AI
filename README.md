@@ -1,9 +1,120 @@
-What the doc covers (9 sections):
-The vision is tight: a person with 5 minutes on their lunch break opens Chronicle, sees a dashboard of 15–20 active topics as cards, taps one, and reads a git-log of everything that happened — oldest to newest, one line per event, expandable for a 3-sentence summary. A "catch me up" button synthesizes the entire arc. That's the product.
-On the three hard problems you raised:
-For clustering across time, the doc proposes a two-stage pipeline — SBERT embeddings + HDBSCAN for same-week grouping, then a named-entity overlap score (spaCy NER) for cross-temporal linking. This is directly grounded in the original DARPA TDT research from 1998, which proved entity-based linking beats pure term-vector similarity for far-in-time events. "Gaza ceasefire January" and "Gaza ceasefire March" share the entities GAZA, HAMAS, ISRAEL, CEASEFIRE — the entity fingerprint keeps them in the same cluster even when vocabulary drifts.
-For scraping, the stack uses GDELT 2.0 as the primary source. GDELT is a public dataset, free, indexes 300,000+ articles per day in 65 languages, and already bakes in geographic and sentiment metadata via its GKG (Global Knowledge Graph) taxonomy — so article-to-topic assignment has a built-in prior. No scraping, no ToS issues.
-For story boundaries, the doc implements a heat score with exponential decay (H = Σ articles × e^(−λΔt)) and a three-state machine: Active → Cooling → Hibernated → Reactivated. A story doesn't "close" — it hibernates when heat drops and wakes up the moment a new article matches its entity fingerprint.
-Feasibility critique (the honest part):
-This is a real production product described at full scope. As an undergrad project, the realistic MVP is: GDELT + 5 RSS feeds, SBERT + HDBSCAN clustering, LexRank commit messages, a working Next.js dashboard, 10–20 English topics. No LLM required for MVP — that's a stretch goal. The riskiest part is clustering quality on live data; the mitigation is seeding v1 with GDELT's own GKG codes as ground truth rather than trusting the clustering blindly from day one. That's a sensible academic hedge.
-The tech stack (Python/FastAPI backend, Next.js frontend, PostgreSQL + pgvector, Railway/Render hosting) is all free-tier deployable and well-documented enough that a stack overflow search will answer most debugging questions.
+# Chronicle AI
+
+News aggregation pipeline that tracks evolving stories as git-style commit logs.
+
+RSS feeds → TF-IDF/KMeans clustering → spaCy NER entity linking → LexRank summarization → PostgreSQL → FastAPI → Next.js 14
+
+## Architecture
+
+| Component | Stack | Role |
+|-----------|-------|------|
+| Backend | FastAPI + APScheduler | REST API, ingestion, clustering, summarization |
+| Frontend | Next.js 14, Tailwind, shadcn/ui | Dashboard, story detail, search |
+| Database | PostgreSQL 16 | Articles, clusters, commits, full-text search |
+
+Single process. No Celery, no Redis, no external AI APIs.
+
+## Local Development
+
+### Prerequisites
+
+- Docker + Docker Compose
+- Node.js 20+ (for frontend development outside Docker)
+
+### Quick Start
+
+```bash
+docker compose up --build
+```
+
+Services:
+- Backend: http://localhost:8000
+- Frontend: http://localhost:3000
+- PostgreSQL: localhost:5432
+
+Migrations run automatically on backend startup via volume mount.
+
+### Manual Migration
+
+```bash
+docker compose exec backend alembic upgrade head
+```
+
+### Health Check
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /api/health | Service health + stats |
+| GET | /api/stories | Active/cooling stories sorted by heat |
+| GET | /api/stories/{id} | Story detail with commits |
+| GET | /api/stories/{id}/commits | Paginated commit history |
+| GET | /api/stories/{id}/catchup | Narrative catch-up summary |
+| GET | /api/search?q= | Full-text article search |
+
+Rate limit: 30 requests/minute on /api/stories.
+
+## Production Deployment
+
+### Backend (Railway)
+
+1. Create a Railway project with PostgreSQL plugin
+2. Connect the repository, set root directory to `backend/`
+3. Railway reads `railway.toml` for build/deploy config
+4. Set environment variables:
+   - `DATABASE_URL` — provided by Railway PostgreSQL plugin
+   - `FRONTEND_URL` — your Vercel deployment URL
+
+The backend runs migrations on startup (`alembic upgrade head`) before starting uvicorn.
+
+### Frontend (Vercel)
+
+1. Import the repository on Vercel
+2. Set root directory to `frontend/`
+3. Set environment variables:
+   - `NEXT_PUBLIC_API_URL` — Railway backend URL (e.g., `https://chronicle-backend.up.railway.app`)
+   - `API_URL` — same as above (used for server-side rendering)
+
+### Environment Variables
+
+| Variable | Where | Required | Default |
+|----------|-------|----------|---------|
+| DATABASE_URL | Backend | Yes | localhost dev URL |
+| FRONTEND_URL | Backend | No | http://localhost:3000 |
+| NEXT_PUBLIC_API_URL | Frontend | Yes | http://localhost:8000 |
+| API_URL | Frontend | No | falls back to NEXT_PUBLIC_API_URL |
+
+## Background Jobs
+
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| Ingestion | Every 30 min | Fetch RSS feeds, deduplicate by URL hash |
+| Clustering | Every 2 hours | TF-IDF + KMeans clustering, NER, heat score, summarization |
+| Cleanup | Daily 3 AM UTC | Prune articles >30 days in hibernated clusters |
+
+## RSS Feeds
+
+BBC World, Reuters, AP News, The Hindu, NDTV. Configured in `backend/app/services/ingestion.py`.
+
+## Clustering Pipeline
+
+1. **Pass 1**: Cosine similarity (TF-IDF) + Jaccard entity overlap against existing clusters. Threshold: 0.3
+2. **Pass 2**: MiniBatchKMeans on unmatched articles (min 3 articles per cluster, max 25 clusters)
+3. **NER**: spaCy `en_core_web_sm` extracts PERSON/ORG/GPE/EVENT entities
+4. **Heat score**: H(t) = Σ e^(-0.15 × Δt) — exponential decay per article age
+5. **States**: active (≥3.0) → cooling (≥1.0) → hibernated (<1.0 for 3+ days)
+6. **Summarization**: LexRank via sumy — 3-sentence extractive summary per commit
+
+## Known Gotchas
+
+- **Alembic URL**: `alembic.ini` has localhost; `env.py` overrides with `settings.database_url` at runtime. Set `DATABASE_URL` env var when running migrations outside Docker.
+- **NLTK data**: `punkt_tab` tokenizer is downloaded at Docker build time. If missing, summarization fails silently.
+- **spaCy model**: `en_core_web_sm` (15 MB) is baked into the Docker image. Changing model requires rebuild.
+- **Railway RAM**: ≤512 MB. The `en_core_web_sm` model + TF-IDF vectorizer fit within limits. Do not use `en_core_web_trf` (500 MB).
+- **Docker network**: Server-side Next.js fetches use `API_URL=http://backend:8000` (Docker service name). Client-side uses `NEXT_PUBLIC_API_URL` (public URL).
+- **Some RSS feeds may fail**: Reuters/AP feeds occasionally change format. Ingestion continues with remaining feeds — partial ingestion is by design.

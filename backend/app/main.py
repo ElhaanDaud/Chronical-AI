@@ -1,5 +1,6 @@
 import time
 from contextlib import asynccontextmanager
+from datetime import timezone as tz
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
@@ -13,6 +14,7 @@ from app.api import api_router
 from app.config import settings
 from app.core.database import async_session_factory
 from app.core.logging import logger
+from app.services.cleanup import cleanup_old_articles
 from app.services.clustering import run_clustering
 from app.services.ingestion import ingest_feeds
 from app.services.lifecycle import run_lifecycle
@@ -33,6 +35,11 @@ async def clustering_job():
         await run_lifecycle(session)
 
 
+async def cleanup_job():
+    async with async_session_factory() as session:
+        await cleanup_old_articles(session)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler.add_job(
@@ -47,6 +54,14 @@ async def lifespan(app: FastAPI):
         "interval",
         hours=settings.clustering_interval_hours,
         id="cluster",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        cleanup_job,
+        "cron",
+        hour=3,
+        timezone=tz.utc,
+        id="cleanup",
         replace_existing=True,
     )
     scheduler.start()

@@ -121,3 +121,6 @@ All implementation decisions flow from `prompt.md`. When in doubt, check the spe
 | Date | Phase | Changes | Files Touched |
 |------|-------|---------|---------------|
 | 2026-04-25 | Phase 1 | Initial backend scaffold: Docker, DB, models, schemas, ingestion, health endpoint, Alembic migrations | All 28 files created |
+| 2026-04-25 | Phase 2 | TF-IDF/KMeans clustering, spaCy NER, heat score lifecycle, LexRank summarization | clustering.py, summarization.py, lifecycle.py, main.py, Dockerfile |
+| 2026-04-25 | Phase 3 | REST API endpoints (stories, search), rate limiting, caching, Next.js frontend (dashboard, story detail, search) | stories.py, search.py, api/__init__.py, frontend/ (39 files), docker-compose.yml |
+| 2026-04-25 | Phase 4 | Data retention cleanup job, Railway/Vercel deploy config, README | cleanup.py, main.py, railway.toml, vercel.json, README.md, Dockerfile |

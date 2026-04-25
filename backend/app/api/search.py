@@ -13,6 +13,7 @@ router = APIRouter()
 async def search_articles(
     q: str = Query(..., min_length=1, max_length=200),
     limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> list[SearchResult]:
     ts_query = func.plainto_tsquery("english", q)
@@ -22,6 +23,7 @@ async def search_articles(
         .where(Article.search_vector.op("@@")(ts_query))
         .order_by(func.ts_rank(Article.search_vector, ts_query).desc())
         .limit(limit)
+        .offset(offset)
     )
     articles = result.scalars().all()
 

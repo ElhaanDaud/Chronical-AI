@@ -20,9 +20,13 @@ nltk>=3.8.0
 
 # Clustering
 scikit-learn>=1.4.0
+numpy>=1.26.0
 
 # Rate limiting
 slowapi>=0.1.9
+
+# LLM client (OpenAI-compatible for DMR + Groq)
+openai>=1.12.0
 
 # Utilities
 python-dotenv>=1.0.0

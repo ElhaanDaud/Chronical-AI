@@ -1,6 +1,7 @@
 export interface StoryCard {
   id: string;
   topic_label: string;
+  topic_tokens: string[];
   latest_commit_message: string;
   heat_score: number;
   state: "active" | "cooling" | "hibernated";
@@ -20,6 +21,7 @@ export interface CommitResponse {
 export interface StoryDetail {
   id: string;
   topic_label: string;
+  topic_tokens: string[];
   state: "active" | "cooling" | "hibernated";
   heat_score: number;
   article_count: number;

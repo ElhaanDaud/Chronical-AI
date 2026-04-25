@@ -4,7 +4,8 @@ import { fetchStory } from "../../../lib/api";
 import { HeatBadge } from "@/components/heat-badge";
 import { CommitLog } from "@/components/commit-log";
 import { CatchUpPanel } from "@/components/catch-up-panel";
-import { Card, CardHeader, CardContent, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardHeader, CardContent, CardDescription } from "@/components/ui/card";
 
 type PageProps = { params: { id: string } };
 
@@ -21,7 +22,13 @@ export default async function StoryDetail({ params }: PageProps) {
       <Link href="/" className="text-sm text-primary hover:underline">&larr; Back</Link>
       <Card>
         <CardHeader>
-          <CardTitle>{story.topic_label}</CardTitle>
+          <div className="flex flex-wrap gap-1.5">
+            {story.topic_tokens.map((token) => (
+              <Badge key={token} variant="secondary" className="text-sm font-medium">
+                {token}
+              </Badge>
+            ))}
+          </div>
         </CardHeader>
         <CardContent>
           <CardDescription className="flex items-center gap-2">

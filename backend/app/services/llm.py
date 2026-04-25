@@ -17,6 +17,7 @@ def _get_dmr_client() -> AsyncOpenAI:
         _dmr_client = AsyncOpenAI(
             base_url=settings.llm_base_url,
             api_key="not-needed",
+            timeout=60.0,
         )
     return _dmr_client
 
@@ -27,6 +28,7 @@ def _get_embedding_client() -> AsyncOpenAI:
         _embedding_client = AsyncOpenAI(
             base_url=settings.embedding_base_url,
             api_key="not-needed",
+            timeout=60.0,
         )
     return _embedding_client
 
@@ -39,6 +41,7 @@ def _get_groq_client() -> AsyncOpenAI | None:
         _groq_client = AsyncOpenAI(
             base_url="https://api.groq.com/openai/v1",
             api_key=settings.groq_api_key,
+            timeout=30.0,
         )
     return _groq_client
 
@@ -93,8 +96,8 @@ async def generate_topic_label(article_titles: list[str]) -> str | None:
     titles_text = "\n".join(f"- {t}" for t in article_titles[:15])
     system = (
         "You are a news editor. Given article titles from a news cluster, "
-        "generate a concise 3-6 word topic label. "
-        "Respond ONLY with JSON: {\"label\": \"Your Label Here\"}"
+        "generate a concise 3-6 word topic label that captures the common theme.\n"
+        'Output JSON: {"label": "Your Topic Label"}'
     )
     user = f"Article titles:\n{titles_text}"
 
@@ -104,9 +107,18 @@ async def generate_topic_label(article_titles: list[str]) -> str | None:
 
     try:
         data = json.loads(result)
-        return data.get("label")
+        label = data.get("label")
+        if label:
+            return label
     except (json.JSONDecodeError, AttributeError):
-        return result[:80] if result else None
+        pass
+
+    import re
+    match = re.search(r'"label"\s*:\s*"([^"]+)"', result)
+    if match:
+        return match.group(1)
+
+    return result[:80].strip('{}" \n') if result else None
 
 
 async def score_coherence(article_titles: list[str]) -> float:
@@ -144,17 +156,18 @@ async def generate_commit_summary(
         return None
 
     articles_text = "\n".join(
-        f"- {t}: {s[:200]}" for t, s in zip(article_titles[:8], article_summaries[:8])
+        f"- {t}: {s[:100]}" for t, s in zip(article_titles[:5], article_summaries[:5])
     )
     system = (
-        "You are a news summarizer writing git-commit-style updates for a news story. "
-        f"The story topic is: {topic_label}\n\n"
-        "Generate a short message (max 150 chars, one line) and a detail paragraph (2-3 sentences). "
-        "Respond ONLY with JSON: {\"message\": \"short update\", \"detail\": \"longer detail\"}"
+        "You are a news editor. Summarize the latest developments in this story.\n"
+        f"Story: {topic_label}\n\n"
+        "Output JSON with two fields:\n"
+        '- "message": A headline-style summary in 10-20 words\n'
+        '- "detail": A 2-3 sentence paragraph explaining the key developments'
     )
-    user = f"New articles:\n{articles_text}"
+    user = f"Latest articles:\n{articles_text}"
 
-    result = await _call_llm(system, user, json_mode=True, max_tokens=400)
+    result = await _call_llm(system, user, json_mode=True, max_tokens=300)
     if not result:
         return None
 
@@ -162,10 +175,18 @@ async def generate_commit_summary(
         data = json.loads(result)
         message = data.get("message", "")[:150]
         detail = data.get("detail", "")
-        if message and detail:
+        if message and detail and message.lower() not in ("short update", "update", "news update"):
             return message, detail
     except (json.JSONDecodeError, AttributeError):
         pass
+
+    import re
+    msg_match = re.search(r'"message"\s*:\s*"([^"]+)"', result)
+    det_match = re.search(r'"detail"\s*:\s*"([^"]+)"', result)
+    if msg_match and det_match:
+        msg = msg_match.group(1)[:150]
+        if msg.lower() not in ("short update", "update", "news update"):
+            return msg, det_match.group(1)
 
     return None
 

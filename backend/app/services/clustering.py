@@ -1,3 +1,4 @@
+import asyncio
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -227,41 +228,63 @@ async def run_clustering(db: AsyncSession) -> int:
             kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42, batch_size=100)
             labels = kmeans.fit_predict(tfidf_pass2)
 
+        _llm_semaphore = asyncio.Semaphore(6)
+
+        async def _process_candidate_group(label_id, group, vectorizer_pass2, tfidf_pass2, labels):
+            async with _llm_semaphore:
+                group_titles = [a.title for a in group]
+                coherence = await _llm_coherence_check(group_titles)
+                if coherence < COHERENCE_THRESHOLD:
+                    logger.info(f"Rejected cluster (coherence {coherence:.2f}): {group_titles[:3]}")
+                    return None
+
+                tfidf_fallback = "Uncategorized"
+                if vectorizer_pass2 is not None and tfidf_pass2 is not None:
+                    tfidf_fallback = _tfidf_topic_label(unmatched, vectorizer_pass2, tfidf_pass2, labels, label_id)
+
+                topic_label = await _llm_topic_label(group_titles, tfidf_fallback)
+
+                all_entities = set()
+                latest_article_at = None
+                for a in group:
+                    all_entities.update(a.entities or [])
+                    if a.published_at and (latest_article_at is None or a.published_at > latest_article_at):
+                        latest_article_at = a.published_at
+
+                return {
+                    "topic_label": topic_label,
+                    "entities": list(all_entities),
+                    "heat_score": calculate_heat(group),
+                    "last_article_at": latest_article_at,
+                    "articles": group,
+                }
+
+        candidate_groups = []
         for label in set(labels):
             group = [unmatched[i] for i, l in enumerate(labels) if l == label]
             if len(group) < MIN_ARTICLES_TO_CLUSTER:
                 continue
+            candidate_groups.append((label, group))
 
-            group_titles = [a.title for a in group]
+        results = await asyncio.gather(*[
+            _process_candidate_group(label_id, group, vectorizer_pass2, tfidf_pass2, labels)
+            for label_id, group in candidate_groups
+        ])
 
-            coherence = await _llm_coherence_check(group_titles)
-            if coherence < COHERENCE_THRESHOLD:
-                logger.info(f"Rejected cluster (coherence {coherence:.2f}): {group_titles[:3]}")
+        for result in results:
+            if result is None:
                 continue
 
-            tfidf_fallback = "Uncategorized"
-            if vectorizer_pass2 is not None and tfidf_pass2 is not None:
-                tfidf_fallback = _tfidf_topic_label(unmatched, vectorizer_pass2, tfidf_pass2, labels, label)
-
-            topic_label = await _llm_topic_label(group_titles, tfidf_fallback)
-
-            all_entities = set()
-            latest_article_at = None
-            for a in group:
-                all_entities.update(a.entities or [])
-                if a.published_at and (latest_article_at is None or a.published_at > latest_article_at):
-                    latest_article_at = a.published_at
-
             new_cluster = Cluster(
-                topic_label=topic_label,
-                entity_fingerprint=list(all_entities),
-                heat_score=calculate_heat(group),
-                last_article_at=latest_article_at,
+                topic_label=result["topic_label"],
+                entity_fingerprint=result["entities"],
+                heat_score=result["heat_score"],
+                last_article_at=result["last_article_at"],
             )
             db.add(new_cluster)
             await db.flush()
 
-            for article in group:
+            for article in result["articles"]:
                 article.cluster_id = new_cluster.id
 
             new_clusters_count += 1

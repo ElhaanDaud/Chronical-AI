@@ -1,4 +1,6 @@
+import hashlib
 import json
+import time
 
 import numpy as np
 from openai import AsyncOpenAI
@@ -9,6 +11,9 @@ from app.core.logging import logger
 _dmr_client: AsyncOpenAI | None = None
 _groq_client: AsyncOpenAI | None = None
 _embedding_client: AsyncOpenAI | None = None
+
+_prompt_cache: dict[str, tuple[str, float]] = {}
+CACHE_TTL = 600
 
 
 def _get_dmr_client() -> AsyncOpenAI:
@@ -52,6 +57,14 @@ async def _call_llm(
     json_mode: bool = False,
     max_tokens: int = 512,
 ) -> str | None:
+    cache_key = hashlib.md5(f"{system_prompt}|{user_prompt}".encode()).hexdigest()
+    now = time.time()
+    if cache_key in _prompt_cache:
+        cached_result, cached_at = _prompt_cache[cache_key]
+        if now - cached_at < CACHE_TTL:
+            return cached_result
+        del _prompt_cache[cache_key]
+
     providers = []
 
     if settings.llm_provider == "dmr":
@@ -81,7 +94,12 @@ async def _call_llm(
             resp = await client.chat.completions.create(model=model, **kwargs)
             content = resp.choices[0].message.content
             if content:
-                return content.strip()
+                result = content.strip()
+                _prompt_cache[cache_key] = (result, time.time())
+                if len(_prompt_cache) > 500:
+                    oldest_key = min(_prompt_cache, key=lambda k: _prompt_cache[k][1])
+                    del _prompt_cache[oldest_key]
+                return result
         except Exception as e:
             logger.warning(f"LLM provider '{name}' failed: {e}")
             continue

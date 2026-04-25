@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.stories import _stories_cache
 from app.core.database import get_db
 from app.core.logging import logger
 from app.services.clustering import run_clustering
@@ -25,4 +26,5 @@ async def trigger_ingest(
         await run_summarization(db)
         await run_lifecycle(db)
 
+    _stories_cache["data"] = None
     return {"status": "ok", "full_pipeline": full_pipeline}

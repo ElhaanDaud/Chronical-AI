@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.article import Article
 from app.schemas.story import SearchResult
+from app.services.clustering import clean_text
 
 router = APIRouter()
 
@@ -31,7 +32,7 @@ async def search_articles(
         SearchResult(
             id=a.id,
             title=a.title,
-            summary=a.summary,
+            summary=clean_text(a.summary),
             source=a.source,
             published_at=a.published_at,
             cluster_id=a.cluster_id,

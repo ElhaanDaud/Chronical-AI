@@ -2,13 +2,12 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.core.logging import logger
 from app.models.article import Article
 from app.models.cluster import Cluster
@@ -22,7 +21,6 @@ from app.schemas.story import (
 from app.services.summarization import generate_catchup
 
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
 
 _stories_cache: dict = {"data": None, "expires_at": datetime.min.replace(tzinfo=timezone.utc)}
 

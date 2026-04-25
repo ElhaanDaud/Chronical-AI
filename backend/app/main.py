@@ -1,0 +1,85 @@
+import time
+from contextlib import asynccontextmanager
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+from app.api import api_router
+from app.config import settings
+from app.core.database import async_session_factory
+from app.core.logging import logger
+from app.services.ingestion import ingest_feeds
+
+scheduler = AsyncIOScheduler()
+
+
+async def ingest_feeds_job():
+    async with async_session_factory() as session:
+        await ingest_feeds(session)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.add_job(
+        ingest_feeds_job,
+        "interval",
+        minutes=settings.ingestion_interval_minutes,
+        id="ingest",
+        replace_existing=True,
+    )
+    scheduler.start()
+    logger.info("Scheduler started")
+    yield
+    scheduler.shutdown()
+    logger.info("Scheduler stopped")
+
+
+app = FastAPI(
+    title="Chronicle AI",
+    description="News story timelines as commit logs",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        settings.frontend_url,
+    ],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def log_slow_requests(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    duration = time.time() - start
+
+    if duration > 2.0:
+        logger.warning(f"SLOW {request.method} {request.url.path} {duration:.2f}s")
+
+    return response
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception(f"Unhandled: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "detail": None},
+    )
+
+
+app.include_router(api_router)

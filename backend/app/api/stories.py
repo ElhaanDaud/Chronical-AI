@@ -27,6 +27,10 @@ limiter = Limiter(key_func=get_remote_address)
 _stories_cache: dict = {"data": None, "expires_at": datetime.min.replace(tzinfo=timezone.utc)}
 
 
+def _derive_topic_tokens(topic_label: str) -> list[str]:
+    return [t.strip() for t in topic_label.split(" — ") if t.strip()] if topic_label else []
+
+
 async def _fetch_stories(db: AsyncSession) -> list[StoryCard]:
     article_count_subq = (
         select(func.count())
@@ -53,6 +57,7 @@ async def _fetch_stories(db: AsyncSession) -> list[StoryCard]:
             StoryCard(
                 id=cluster.id,
                 topic_label=cluster.topic_label,
+                topic_tokens=_derive_topic_tokens(cluster.topic_label),
                 latest_commit_message=latest_commit.message if latest_commit else "",
                 heat_score=cluster.heat_score,
                 state=cluster.state,
@@ -117,6 +122,7 @@ async def get_story(
     return StoryDetail(
         id=cluster.id,
         topic_label=cluster.topic_label,
+        topic_tokens=_derive_topic_tokens(cluster.topic_label),
         state=cluster.state,
         heat_score=cluster.heat_score,
         article_count=len(cluster.articles),

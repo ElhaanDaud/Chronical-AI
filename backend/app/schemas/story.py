@@ -7,6 +7,7 @@ from pydantic import BaseModel
 class StoryCard(BaseModel):
     id: UUID
     topic_label: str
+    topic_tokens: list[str]
     latest_commit_message: str
     heat_score: float
     state: str
@@ -19,6 +20,7 @@ class StoryCard(BaseModel):
 class StoryDetail(BaseModel):
     id: UUID
     topic_label: str
+    topic_tokens: list[str]
     state: str
     heat_score: float
     article_count: int

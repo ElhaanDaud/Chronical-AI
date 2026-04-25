@@ -13,7 +13,10 @@ from app.api import api_router
 from app.config import settings
 from app.core.database import async_session_factory
 from app.core.logging import logger
+from app.services.clustering import run_clustering
 from app.services.ingestion import ingest_feeds
+from app.services.lifecycle import run_lifecycle
+from app.services.summarization import run_summarization
 
 scheduler = AsyncIOScheduler()
 
@@ -23,6 +26,13 @@ async def ingest_feeds_job():
         await ingest_feeds(session)
 
 
+async def clustering_job():
+    async with async_session_factory() as session:
+        await run_clustering(session)
+        await run_summarization(session)
+        await run_lifecycle(session)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler.add_job(
@@ -30,6 +40,13 @@ async def lifespan(app: FastAPI):
         "interval",
         minutes=settings.ingestion_interval_minutes,
         id="ingest",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        clustering_job,
+        "interval",
+        hours=settings.clustering_interval_hours,
+        id="cluster",
         replace_existing=True,
     )
     scheduler.start()

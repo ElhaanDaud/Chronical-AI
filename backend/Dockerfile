@@ -4,8 +4,9 @@ WORKDIR /app
 
 # Install spaCy model at build time
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    python -m spacy download en_core_web_sm
+RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m spacy download en_core_web_sm && \
+    python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
 
 COPY . .
 

@@ -2,7 +2,6 @@ import math
 import re
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
-from io import StringIO
 
 import numpy as np
 import spacy
@@ -20,8 +19,9 @@ from app.models.commit import Commit
 
 MIN_ARTICLES_TO_CLUSTER = 3
 MAX_CLUSTERS = 25
-SIMILARITY_THRESHOLD = 0.3
+SIMILARITY_THRESHOLD = 0.55
 DECAY_LAMBDA = 0.15
+COHERENCE_THRESHOLD = 0.4
 
 _NOISE_PATTERN = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 
@@ -96,7 +96,7 @@ def calculate_heat(articles: list[Article], commits: list | None = None) -> floa
     return round(score, 2)
 
 
-def extract_topic_label(articles: list, vectorizer: TfidfVectorizer, tfidf_matrix, labels, target_label: int) -> str:
+def _tfidf_topic_label(articles: list, vectorizer: TfidfVectorizer, tfidf_matrix, labels, target_label: int) -> str:
     cluster_indices = [i for i, l in enumerate(labels) if l == target_label]
     if not cluster_indices:
         return "Uncategorized"
@@ -104,7 +104,23 @@ def extract_topic_label(articles: list, vectorizer: TfidfVectorizer, tfidf_matri
     feature_names = vectorizer.get_feature_names_out()
     top_indices = cluster_tfidf.argsort()[-4:][::-1]
     keywords = [feature_names[i] for i in top_indices]
-    return " \u2014 ".join(keywords).title()
+    return " — ".join(keywords).title()
+
+
+async def _get_article_embeddings(texts: list[str]) -> np.ndarray | None:
+    from app.services.llm import get_embeddings
+    return await get_embeddings(texts)
+
+
+async def _llm_topic_label(titles: list[str], fallback: str) -> str:
+    from app.services.llm import generate_topic_label
+    label = await generate_topic_label(titles)
+    return label if label else fallback
+
+
+async def _llm_coherence_check(titles: list[str]) -> float:
+    from app.services.llm import score_coherence
+    return await score_coherence(titles)
 
 
 async def run_clustering(db: AsyncSession) -> int:
@@ -141,13 +157,21 @@ async def run_clustering(db: AsyncSession) -> int:
         article_texts = [f"{a.title} {clean_text(a.summary)}" for a in unclustered]
         all_texts = cluster_texts + article_texts
 
-        vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
-        tfidf_matrix = vectorizer.fit_transform(all_texts)
+        embeddings = await _get_article_embeddings(all_texts)
+        use_embeddings = embeddings is not None
 
-        cluster_vecs = tfidf_matrix[:len(existing_clusters)]
-        article_vecs = tfidf_matrix[len(existing_clusters):]
-
-        sim_matrix = cosine_similarity(article_vecs, cluster_vecs)
+        if use_embeddings:
+            logger.info("Using dense embeddings for clustering (DMR)")
+            cluster_vecs = embeddings[:len(existing_clusters)]
+            article_vecs = embeddings[len(existing_clusters):]
+            sim_matrix = cosine_similarity(article_vecs, cluster_vecs)
+        else:
+            logger.info("Falling back to TF-IDF for clustering")
+            vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
+            tfidf_matrix = vectorizer.fit_transform(all_texts)
+            cluster_vecs = tfidf_matrix[:len(existing_clusters)]
+            article_vecs = tfidf_matrix[len(existing_clusters):]
+            sim_matrix = cosine_similarity(article_vecs, cluster_vecs)
 
         for i, article in enumerate(unclustered):
             sims = sim_matrix[i]
@@ -181,40 +205,66 @@ async def run_clustering(db: AsyncSession) -> int:
 
     if len(unmatched) >= MIN_ARTICLES_TO_CLUSTER:
         texts = [f"{a.title} {clean_text(a.summary)}" for a in unmatched]
-        vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
-        tfidf = vectorizer.fit_transform(texts)
 
-        n_clusters = min(len(unmatched) // MIN_ARTICLES_TO_CLUSTER, MAX_CLUSTERS)
-        n_clusters = max(n_clusters, 1)
+        unmatched_embeddings = await _get_article_embeddings(texts)
+        use_embeddings_pass2 = unmatched_embeddings is not None
 
-        kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42, batch_size=100)
-        labels = kmeans.fit_predict(tfidf)
+        if use_embeddings_pass2:
+            from sklearn.metrics.pairwise import pairwise_distances
+            distance_matrix = pairwise_distances(unmatched_embeddings, metric="cosine")
+            n_clusters = min(len(unmatched) // MIN_ARTICLES_TO_CLUSTER, MAX_CLUSTERS)
+            n_clusters = max(n_clusters, 1)
+            kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42, batch_size=100)
+            kmeans.fit(unmatched_embeddings)
+            labels = kmeans.labels_
+            vectorizer_pass2 = None
+            tfidf_pass2 = None
+        else:
+            vectorizer_pass2 = TfidfVectorizer(stop_words="english", max_features=5000)
+            tfidf_pass2 = vectorizer_pass2.fit_transform(texts)
+            n_clusters = min(len(unmatched) // MIN_ARTICLES_TO_CLUSTER, MAX_CLUSTERS)
+            n_clusters = max(n_clusters, 1)
+            kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42, batch_size=100)
+            labels = kmeans.fit_predict(tfidf_pass2)
 
         for label in set(labels):
             group = [unmatched[i] for i, l in enumerate(labels) if l == label]
-            if len(group) >= MIN_ARTICLES_TO_CLUSTER:
-                topic_label = extract_topic_label(unmatched, vectorizer, tfidf, labels, label)
+            if len(group) < MIN_ARTICLES_TO_CLUSTER:
+                continue
 
-                all_entities = set()
-                latest_article_at = None
-                for a in group:
-                    all_entities.update(a.entities or [])
-                    if latest_article_at is None or a.published_at > latest_article_at:
-                        latest_article_at = a.published_at
+            group_titles = [a.title for a in group]
 
-                new_cluster = Cluster(
-                    topic_label=topic_label,
-                    entity_fingerprint=list(all_entities),
-                    heat_score=calculate_heat(group),
-                    last_article_at=latest_article_at,
-                )
-                db.add(new_cluster)
-                await db.flush()
+            coherence = await _llm_coherence_check(group_titles)
+            if coherence < COHERENCE_THRESHOLD:
+                logger.info(f"Rejected cluster (coherence {coherence:.2f}): {group_titles[:3]}")
+                continue
 
-                for article in group:
-                    article.cluster_id = new_cluster.id
+            tfidf_fallback = "Uncategorized"
+            if vectorizer_pass2 is not None and tfidf_pass2 is not None:
+                tfidf_fallback = _tfidf_topic_label(unmatched, vectorizer_pass2, tfidf_pass2, labels, label)
 
-                new_clusters_count += 1
+            topic_label = await _llm_topic_label(group_titles, tfidf_fallback)
+
+            all_entities = set()
+            latest_article_at = None
+            for a in group:
+                all_entities.update(a.entities or [])
+                if a.published_at and (latest_article_at is None or a.published_at > latest_article_at):
+                    latest_article_at = a.published_at
+
+            new_cluster = Cluster(
+                topic_label=topic_label,
+                entity_fingerprint=list(all_entities),
+                heat_score=calculate_heat(group),
+                last_article_at=latest_article_at,
+            )
+            db.add(new_cluster)
+            await db.flush()
+
+            for article in group:
+                article.cluster_id = new_cluster.id
+
+            new_clusters_count += 1
 
     await db.flush()
 

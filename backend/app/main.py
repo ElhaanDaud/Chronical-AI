@@ -39,6 +39,8 @@ async def clustering_job():
             await run_summarization(session)
             await run_lifecycle(session)
             await run_gdelt_backfill(session)
+            from app.api.stories import _stories_cache
+            _stories_cache["data"] = None
     except Exception as e:
         logger.exception(f"Clustering job failed: {e}")
 

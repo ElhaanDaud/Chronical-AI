@@ -16,6 +16,7 @@ from app.core.limiter import limiter
 from app.core.logging import logger
 from app.services.cleanup import cleanup_old_articles
 from app.services.clustering import run_clustering
+from app.services.gdelt import run_gdelt_backfill
 from app.services.ingestion import ingest_feeds
 from app.services.lifecycle import run_lifecycle
 from app.services.summarization import run_summarization
@@ -37,6 +38,7 @@ async def clustering_job():
             await run_clustering(session)
             await run_summarization(session)
             await run_lifecycle(session)
+            await run_gdelt_backfill(session)
     except Exception as e:
         logger.exception(f"Clustering job failed: {e}")
 

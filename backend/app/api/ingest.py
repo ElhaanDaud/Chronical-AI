@@ -5,6 +5,7 @@ from app.api.stories import _stories_cache
 from app.core.database import get_db
 from app.core.logging import logger
 from app.services.clustering import run_clustering
+from app.services.gdelt import run_gdelt_backfill
 from app.services.ingestion import ingest_feeds
 from app.services.lifecycle import run_lifecycle
 from app.services.summarization import run_summarization
@@ -21,10 +22,11 @@ async def trigger_ingest(
     await ingest_feeds(db)
 
     if full_pipeline:
-        logger.info("Running full pipeline: clustering → summarization → lifecycle")
+        logger.info("Running full pipeline: clustering → summarization → lifecycle → GDELT backfill")
         await run_clustering(db)
         await run_summarization(db)
         await run_lifecycle(db)
+        await run_gdelt_backfill(db)
 
     _stories_cache["data"] = None
     return {"status": "ok", "full_pipeline": full_pipeline}

@@ -16,7 +16,7 @@ from app.models.commit import Commit
 from app.services.clustering import clean_text
 
 
-def generate_commit(articles: list[Article]) -> tuple[str, str]:
+def _lexrank_commit(articles: list[Article]) -> tuple[str, str]:
     recent = sorted(articles, key=lambda a: a.published_at, reverse=True)[:10]
     combined = "\n\n".join(
         f"{a.title}. {clean_text(a.summary)}"
@@ -43,6 +43,21 @@ def generate_commit(articles: list[Article]) -> tuple[str, str]:
     return message, detail
 
 
+async def _llm_commit(topic_label: str, articles: list[Article]) -> tuple[str, str] | None:
+    from app.services.llm import generate_commit_summary
+    titles = [a.title for a in articles[:8]]
+    summaries = [clean_text(a.summary) for a in articles[:8]]
+    return await generate_commit_summary(topic_label, titles, summaries)
+
+
+async def generate_commit(topic_label: str, articles: list[Article]) -> tuple[str, str]:
+    llm_result = await _llm_commit(topic_label, articles)
+    if llm_result:
+        return llm_result
+    logger.info("LLM commit generation failed, falling back to LexRank")
+    return _lexrank_commit(articles)
+
+
 def generate_catchup(commits: list[Commit]) -> str:
     if not commits:
         return "No developments to report yet."
@@ -62,7 +77,7 @@ def generate_catchup(commits: list[Commit]) -> str:
         narrative += "Key developments since then:\n"
         for c in key_moments:
             date = c.commit_date.strftime("%b %d")
-            narrative += f"\u2022 {date}: {c.message}\n"
+            narrative += f"• {date}: {c.message}\n"
         narrative += "\n"
 
     last = sorted_commits[-1]
@@ -92,10 +107,10 @@ async def run_summarization(db: AsyncSession) -> int:
 
         new_articles = [a for a in cluster.articles if a.id not in existing_article_ids]
 
-        if len(new_articles) < 2:
+        if len(new_articles) < 1:
             continue
 
-        message, detail = generate_commit(new_articles)
+        message, detail = await generate_commit(cluster.topic_label, new_articles)
 
         commit = Commit(
             cluster_id=cluster.id,

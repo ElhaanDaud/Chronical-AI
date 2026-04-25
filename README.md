@@ -2,7 +2,7 @@
 
 News aggregation pipeline that tracks evolving stories as git-style commit logs.
 
-RSS feeds → TF-IDF + dense embeddings clustering → LLM coherence gate → LLM-generated summaries → PostgreSQL → FastAPI → Next.js 14
+RSS feeds → TF-IDF + dense embeddings clustering → LLM coherence gate → LLM-generated summaries → GDELT historical backfill → PostgreSQL → FastAPI → Next.js 14
 
 ## Architecture
 
@@ -14,6 +14,7 @@ RSS feeds → TF-IDF + dense embeddings clustering → LLM coherence gate → LL
 | LLM (primary) | Docker Model Runner (ai/llama3.2:1B-Q4_0) | Topic labels, coherence scoring, commit summaries |
 | Embeddings | Docker Model Runner (ai/qwen3-embedding:0.6B-F16) | Dense semantic similarity for clustering |
 | LLM (fallback) | Groq API (llama-3.1-8b-instant) | Fallback when DMR unavailable |
+| Historical data | GDELT Doc API | Backfills 20-day commit history per cluster (English only) |
 
 Single process. No Celery, no Redis. LLM runs via Docker Model Runner (host-side) or Groq API — not inside the backend container.
 
@@ -217,7 +218,7 @@ The backend runs migrations on startup (`alembic upgrade head`) before starting 
 | Job | Schedule | Description |
 |-----|----------|-------------|
 | Ingestion | Every 30 min | Fetch RSS feeds, deduplicate by URL hash |
-| Clustering | Every 2 hours | TF-IDF + KMeans clustering, NER, heat score, summarization |
+| Clustering | Every 2 hours | TF-IDF + KMeans clustering, NER, heat score, summarization, GDELT backfill |
 | Cleanup | Daily 3 AM UTC | Prune articles >30 days in hibernated clusters |
 
 ## RSS Feeds
@@ -235,6 +236,10 @@ BBC World, Reuters, The Hindu, NDTV, NPR, Al Jazeera. Configured in `backend/app
 7. **Heat score**: H(t) = Σ e^(-0.15 × Δt) + 0.5 × commits_last_10_days
 8. **States**: active (≥3.0) → cooling (≥1.0) → hibernated (<1.0 for 3+ days)
 9. **Summarization**: LLM-generated commit messages and details (fallback: LexRank via sumy)
+10. **GDELT backfill**: Fetches English-language articles from GDELT Doc API for the past 20 days per cluster topic, creating backdated commits to build a timeline of story evolution
+11. **LLM parallelism**: Coherence + label checks run concurrently via asyncio.gather with semaphore (6 concurrent)
+12. **Prompt caching**: Identical LLM prompts are cached for 10 minutes (md5 hash key) to avoid redundant API calls
+13. **DMR tuning**: llama.cpp runtime configured with 8 threads and batch_size 1024 for faster inference
 
 ## Known Gotchas
 
@@ -248,3 +253,5 @@ BBC World, Reuters, The Hindu, NDTV, NPR, Al Jazeera. Configured in `backend/app
 - **Llama 3.2 1B limitations**: The 1B model occasionally generates poor JSON or parrots prompt examples. The code has regex fallback parsing and rejects template-parroted values like "short update".
 - **RSS feed resilience**: Some feeds occasionally change format. Ingestion continues with remaining feeds — partial ingestion is by design.
 - **LLM fallback chain**: DMR primary → Groq fallback (or vice versa based on LLM_PROVIDER). If both fail, clustering uses TF-IDF labels and LexRank summaries.
+- **GDELT rate limits**: GDELT Doc API returns 429 on heavy use. Backfill sleeps 1s between windows and 10s on rate limit. Some windows may return empty/non-JSON responses (logged as warnings, not failures).
+- **GDELT backfill timing**: First full pipeline run creates GDELT commits for all clusters with <4 commits. Subsequent runs only backfill new clusters. ~15-25 minutes for 15 clusters due to API rate limits.

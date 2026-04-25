@@ -4,7 +4,7 @@
 
 ## Overview
 
-News aggregation pipeline: RSS feeds → dedup → TF-IDF clustering → LexRank summarization → PostgreSQL → FastAPI → Next.js 14. Single-process, no Celery/Redis, ≤512MB RAM target.
+News aggregation pipeline: RSS feeds → dedup → TF-IDF/embedding clustering → LLM coherence gate → LLM summarization → GDELT historical backfill → PostgreSQL → FastAPI → Next.js 14. Single-process, no Celery/Redis, ≤512MB RAM target.
 
 ## Structure
 
@@ -16,7 +16,7 @@ chronical-ai/
 │   │   ├── core/          # database.py (async engine), logging.py (single "chronicle" logger), limiter.py (shared slowapi Limiter)
 │   │   ├── models/        # SQLAlchemy ORM: Cluster, Article, Commit
 │   │   ├── schemas/       # Pydantic: StoryCard, StoryDetail, CommitResponse, CatchUpResponse, HealthResponse, ErrorResponse
-│   │   ├── services/      # ingestion, clustering, summarization, lifecycle, cleanup, llm
+│   │   ├── services/      # ingestion, clustering, summarization, lifecycle, cleanup, llm, gdelt
 │   │   ├── config.py      # Pydantic Settings (env_file=".env") — includes LLM/embedding config
 │   │   └── main.py        # FastAPI app, APScheduler (3 jobs), CORS, slowapi, global exception handler
 │   ├── alembic/           # Async migrations (001_initial_schema: clusters, articles, commits + tsvector trigger)
@@ -61,7 +61,7 @@ main.py
 │   ├── app.api.health (get_db, Article, Cluster, HealthResponse)
 │   ├── app.api.stories (get_db, Cluster, Article, Commit, StoryCard, StoryDetail, CommitResponse, CatchUpResponse)
 │   ├── app.api.search (get_db, Article, SearchResult)
-│   └── app.api.ingest (ingest_feeds, run_clustering, run_summarization, run_lifecycle)
+│   └── app.api.ingest (ingest_feeds, run_clustering, run_summarization, run_lifecycle, run_gdelt_backfill)
 ├── app.config (settings)
 ├── app.core.database (async_session_factory)
 ├── app.core.logging (logger)
@@ -70,6 +70,7 @@ main.py
 ├── app.services.summarization (run_summarization)
 ├── app.services.lifecycle (run_lifecycle)
 └── app.services.cleanup (cleanup_old_articles)
+└── app.services.gdelt (run_gdelt_backfill)
 
 app.models
 ├── cluster.py → defines Base (DeclarativeBase)
@@ -81,6 +82,7 @@ app.services.summarization → imports app.models, app.core.logging, sumy, nltk
 app.services.lifecycle → imports app.models, app.core.logging, app.services.clustering (calculate_heat)
 app.services.cleanup → imports app.models, app.core.logging, app.config
 app.services.llm → imports app.config, app.core.logging, openai (AsyncOpenAI), numpy
+app.services.gdelt → imports app.core.logging, app.models.cluster, app.models.commit, app.services.clustering (clean_text), app.services.llm, httpx
 
 app.core.database → imports app.config.settings
 app.core.limiter → imports slowapi (standalone, no app-level deps)
@@ -179,3 +181,4 @@ All implementation decisions flow from `prompt.md`. When in doubt, check the spe
 | 2026-04-26 | Audit 2 | 7 critical/high fixes: HTMLParser crash guard, None date guard, stale selectinload refresh, search HTML sanitization, cache invalidation, updated_at on article assignment, shared rate limiter | clustering.py, search.py, ingest.py, stories.py, main.py, core/limiter.py |
 | 2026-04-26 | LLM | Docker Model Runner integration: llm.py service (DMR + Groq dual-provider), LLM coherence gate, LLM topic labels, LLM commit summaries, dense embeddings via qwen3 | llm.py, clustering.py, summarization.py, config.py, docker-compose.yml, requirements.txt |
 | 2026-04-26 | DMR Setup | Docker Engine DMR config: port 12434, extra_hosts networking, prompt hardening for Llama 3.2 1B JSON compliance | config.py, docker-compose.yml, .env.example, llm.py |
+| 2026-04-26 | GDELT | GDELT Doc API historical backfill (20 days, English), asyncio.gather parallel LLM calls, prompt caching, DMR thread tuning (8 threads, batch 1024) | gdelt.py, clustering.py, llm.py, main.py, ingest.py |

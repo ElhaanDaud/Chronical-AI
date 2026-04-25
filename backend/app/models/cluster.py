@@ -30,7 +30,7 @@ class Cluster(Base):
         default="active",
     )
     heat_score: Mapped[float] = mapped_column(Float, default=0.0)
-    entity_fingerprint: Mapped[dict] = mapped_column(JSONB, default=list)
+    entity_fingerprint: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

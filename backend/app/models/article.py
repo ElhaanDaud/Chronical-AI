@@ -25,11 +25,11 @@ class Article(Base):
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    entities: Mapped[dict] = mapped_column(JSONB, default=list)
+    entities: Mapped[list] = mapped_column(JSONB, default=list)
     cluster_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clusters.id"), nullable=True
     )
-    search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
+    search_vector = mapped_column(TSVECTOR, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -20,9 +20,32 @@ Single process. No Celery, no Redis. LLM runs via Docker Model Runner (host-side
 ## Prerequisites
 
 - Docker + Docker Compose
-- Docker Desktop with Model Runner enabled (for local LLM — optional, falls back to Groq)
-- Groq API key (free tier at https://console.groq.com) — required if not using Docker Model Runner
+- Docker Model Runner — works with **Docker Desktop** (enable in AI settings) **or Docker Engine** (install `docker-model-plugin` package)
+- Groq API key (free tier at https://console.groq.com) — required as fallback if DMR unavailable
 - Node.js 20+ (only for frontend development outside Docker)
+
+### Install Docker Model Runner (Docker Engine — no Docker Desktop needed)
+
+```bash
+# Ubuntu/Debian
+sudo apt-get update && sudo apt-get install docker-model-plugin
+
+# RPM-based (Fedora, RHEL)
+sudo dnf update && sudo dnf install docker-model-plugin
+
+# Install the inference runner
+docker model install-runner
+
+# Pull required models
+docker model pull ai/llama3.2:1B-Q4_0
+docker model pull ai/qwen3-embedding:0.6B-F16
+
+# Verify
+docker model ls
+curl http://localhost:12434/engines/v1/models
+```
+
+> **Note**: On Docker Engine, DMR serves on port 12434 (TCP enabled by default). Containers reach DMR via `extra_hosts: ["model-runner.docker.internal:host-gateway"]` in docker-compose.yml. On Docker Desktop, port is implicit and `model-runner.docker.internal` resolves automatically.
 
 ## Quick Start
 
@@ -183,9 +206,9 @@ The backend runs migrations on startup (`alembic upgrade head`) before starting 
 | GROQ_API_KEY | Backend | Yes (if LLM_PROVIDER=groq) | — |
 | LLM_PROVIDER | Backend | No | groq |
 | LLM_MODEL | Backend | No | ai/llama3.2:1B-Q4_0 |
-| LLM_BASE_URL | Backend | No | http://model-runner.docker.internal/engines/v1 |
+| LLM_BASE_URL | Backend | No | http://model-runner.docker.internal:12434/engines/v1 |
 | EMBEDDING_MODEL | Backend | No | ai/qwen3-embedding:0.6B-F16 |
-| EMBEDDING_BASE_URL | Backend | No | http://model-runner.docker.internal/engines/llama.cpp/v1 |
+| EMBEDDING_BASE_URL | Backend | No | http://model-runner.docker.internal:12434/engines/llama.cpp/v1 |
 | NEXT_PUBLIC_API_URL | Frontend | Yes | http://localhost:8000 |
 | API_URL | Frontend | No | falls back to NEXT_PUBLIC_API_URL |
 
@@ -220,6 +243,8 @@ BBC World, Reuters, The Hindu, NDTV, NPR, Al Jazeera. Configured in `backend/app
 - **spaCy model**: `en_core_web_sm` (15 MB) is baked into the Docker image. Changing model requires rebuild.
 - **Railway RAM**: ≤512 MB. The `en_core_web_sm` model + TF-IDF vectorizer fit within limits. LLM runs outside the backend container (Docker Model Runner or Groq API). Do not use `en_core_web_trf` (500 MB).
 - **Docker network**: Server-side Next.js fetches use `API_URL=http://backend:8000` (Docker service name). Client-side uses `NEXT_PUBLIC_API_URL` (public URL).
-- **Docker Model Runner**: Requires Docker Desktop with Model Runner enabled. Models run on the host, not inside containers. Backend accesses via `http://model-runner.docker.internal`. Falls back to Groq if unavailable.
+- **Docker Model Runner**: Works with Docker Desktop (enable Model Runner in AI settings) or Docker Engine (install `docker-model-plugin`). On Docker Engine, DMR listens on port 12434 and containers need `extra_hosts: ["model-runner.docker.internal:host-gateway"]`. Models run on the host, not inside containers. Falls back to Groq if unavailable.
+- **DMR cold start**: First LLM request after model pull loads the model into memory (5-15s). Subsequent requests are fast. If the pipeline runs before the model is warm, some commit messages may fall back to LexRank.
+- **Llama 3.2 1B limitations**: The 1B model occasionally generates poor JSON or parrots prompt examples. The code has regex fallback parsing and rejects template-parroted values like "short update".
 - **RSS feed resilience**: Some feeds occasionally change format. Ingestion continues with remaining feeds — partial ingestion is by design.
 - **LLM fallback chain**: DMR primary → Groq fallback (or vice versa based on LLM_PROVIDER). If both fail, clustering uses TF-IDF labels and LexRank summaries.

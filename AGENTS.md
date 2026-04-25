@@ -1,6 +1,6 @@
 # Chronicle AI — Knowledge Base
 
-**Generated:** 2026-04-26 | **Branch:** main | **Commit:** cff512f
+**Generated:** 2026-04-26 | **Branch:** main | **Commit:** 4a3df41
 
 ## Overview
 
@@ -16,8 +16,8 @@ chronical-ai/
 │   │   ├── core/          # database.py (async engine), logging.py (single "chronicle" logger), limiter.py (shared slowapi Limiter)
 │   │   ├── models/        # SQLAlchemy ORM: Cluster, Article, Commit
 │   │   ├── schemas/       # Pydantic: StoryCard, StoryDetail, CommitResponse, CatchUpResponse, HealthResponse, ErrorResponse
-│   │   ├── services/      # ingestion, clustering, summarization, lifecycle, cleanup
-│   │   ├── config.py      # Pydantic Settings (env_file=".env")
+│   │   ├── services/      # ingestion, clustering, summarization, lifecycle, cleanup, llm
+│   │   ├── config.py      # Pydantic Settings (env_file=".env") — includes LLM/embedding config
 │   │   └── main.py        # FastAPI app, APScheduler (3 jobs), CORS, slowapi, global exception handler
 │   ├── alembic/           # Async migrations (001_initial_schema: clusters, articles, commits + tsvector trigger)
 │   ├── alembic.ini
@@ -32,7 +32,7 @@ chronical-ai/
 │   ├── Dockerfile         # Multi-stage node:20-alpine, standalone output
 │   ├── vercel.json        # Vercel deployment config
 │   └── package.json
-├── docker-compose.yml     # postgres:16-alpine + backend + frontend
+├── docker-compose.yml     # postgres:16-alpine + backend + frontend (extra_hosts for DMR)
 ├── .env.example
 ├── prompt.md              # 1100-line implementation spec (the bible)
 └── orchestrator.md        # 4-phase implementation plan
@@ -80,6 +80,7 @@ app.services.clustering → imports app.models, app.core.logging, sklearn, spacy
 app.services.summarization → imports app.models, app.core.logging, sumy, nltk
 app.services.lifecycle → imports app.models, app.core.logging, app.services.clustering (calculate_heat)
 app.services.cleanup → imports app.models, app.core.logging, app.config
+app.services.llm → imports app.config, app.core.logging, openai (AsyncOpenAI), numpy
 
 app.core.database → imports app.config.settings
 app.core.limiter → imports slowapi (standalone, no app-level deps)
@@ -122,6 +123,9 @@ No circular dependencies. Base lives in `cluster.py` — all models import from 
 - **Docker network routing**: Server-side Next.js fetches use `API_URL=http://backend:8000` (Docker service name). Client-side uses `NEXT_PUBLIC_API_URL`
 - **NLTK punkt_tab**: Downloaded at build time in Dockerfile. If missing, LexRank summarization fails
 - **Static prerender disabled**: Dashboard and search pages use `force-dynamic` export to avoid build-time API fetch failures
+- **Docker Model Runner (DMR)**: Works on Docker Desktop (implicit networking) or Docker Engine (`docker-model-plugin` package, port 12434, `extra_hosts` in compose). Models run on host, not in backend container. Config in `config.py` (llm_base_url, embedding_base_url)
+- **DMR cold start**: First request loads model into memory (5-15s). Rapid pipeline requests during cold start cause LLM fallback to LexRank/TF-IDF
+- **Llama 3.2 1B JSON compliance**: 1B model sometimes parrots prompt examples or outputs malformed JSON. `llm.py` has regex fallback parsing and rejects template values
 
 ## Commands
 
@@ -173,3 +177,5 @@ All implementation decisions flow from `prompt.md`. When in doubt, check the spe
 | 2026-04-26 | Audit | 14 bug fixes: ORM types, N+1 query, TF-IDF perf, URL normalization, error handling, RSS feeds, lifecycle, cleanup batching | 10 backend files |
 | 2026-04-26 | Enhance | HTML text cleaning, heat momentum with commit activity, topic_tokens UX (backend + frontend) | clustering.py, summarization.py, lifecycle.py, story.py, stories.py, api.ts, story-card.tsx, page.tsx |
 | 2026-04-26 | Audit 2 | 7 critical/high fixes: HTMLParser crash guard, None date guard, stale selectinload refresh, search HTML sanitization, cache invalidation, updated_at on article assignment, shared rate limiter | clustering.py, search.py, ingest.py, stories.py, main.py, core/limiter.py |
+| 2026-04-26 | LLM | Docker Model Runner integration: llm.py service (DMR + Groq dual-provider), LLM coherence gate, LLM topic labels, LLM commit summaries, dense embeddings via qwen3 | llm.py, clustering.py, summarization.py, config.py, docker-compose.yml, requirements.txt |
+| 2026-04-26 | DMR Setup | Docker Engine DMR config: port 12434, extra_hosts networking, prompt hardening for Llama 3.2 1B JSON compliance | config.py, docker-compose.yml, .env.example, llm.py |

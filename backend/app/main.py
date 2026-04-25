@@ -24,20 +24,29 @@ scheduler = AsyncIOScheduler()
 
 
 async def ingest_feeds_job():
-    async with async_session_factory() as session:
-        await ingest_feeds(session)
+    try:
+        async with async_session_factory() as session:
+            await ingest_feeds(session)
+    except Exception as e:
+        logger.exception(f"Ingestion job failed: {e}")
 
 
 async def clustering_job():
-    async with async_session_factory() as session:
-        await run_clustering(session)
-        await run_summarization(session)
-        await run_lifecycle(session)
+    try:
+        async with async_session_factory() as session:
+            await run_clustering(session)
+            await run_summarization(session)
+            await run_lifecycle(session)
+    except Exception as e:
+        logger.exception(f"Clustering job failed: {e}")
 
 
 async def cleanup_job():
-    async with async_session_factory() as session:
-        await cleanup_old_articles(session)
+    try:
+        async with async_session_factory() as session:
+            await cleanup_old_articles(session)
+    except Exception as e:
+        logger.exception(f"Cleanup job failed: {e}")
 
 
 @asynccontextmanager
@@ -88,7 +97,7 @@ app.add_middleware(
         "http://localhost:3000",
         settings.frontend_url,
     ],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 

@@ -34,7 +34,6 @@ def determine_state(heat_score: float, current_state: str, last_article_at: date
 async def run_lifecycle(db: AsyncSession) -> dict[str, int]:
     result = await db.execute(
         select(Cluster)
-        .where(Cluster.state.in_(["active", "cooling"]))
         .options(selectinload(Cluster.articles))
     )
     clusters = list(result.scalars().all())
@@ -57,7 +56,8 @@ async def run_lifecycle(db: AsyncSession) -> dict[str, int]:
     await db.commit()
 
     logger.info(
-        f"Lifecycle complete: {transitions['cooling']} moved to cooling, "
+        f"Lifecycle complete: {transitions['active']} reactivated, "
+        f"{transitions['cooling']} moved to cooling, "
         f"{transitions['hibernated']} hibernated"
     )
     return transitions

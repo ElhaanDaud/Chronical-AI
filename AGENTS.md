@@ -1,6 +1,6 @@
 # Chronicle AI — Knowledge Base
 
-**Generated:** 2026-04-26 | **Branch:** main | **Commit:** 236df57
+**Generated:** 2026-04-26 | **Branch:** main | **Commit:** cff512f
 
 ## Overview
 
@@ -13,7 +13,7 @@ chronical-ai/
 ├── backend/
 │   ├── app/
 │   │   ├── api/           # FastAPI routers: health, stories, search, ingest
-│   │   ├── core/          # database.py (async engine), logging.py (single "chronicle" logger)
+│   │   ├── core/          # database.py (async engine), logging.py (single "chronicle" logger), limiter.py (shared slowapi Limiter)
 │   │   ├── models/        # SQLAlchemy ORM: Cluster, Article, Commit
 │   │   ├── schemas/       # Pydantic: StoryCard, StoryDetail, CommitResponse, CatchUpResponse, HealthResponse, ErrorResponse
 │   │   ├── services/      # ingestion, clustering, summarization, lifecycle, cleanup
@@ -82,6 +82,7 @@ app.services.lifecycle → imports app.models, app.core.logging, app.services.cl
 app.services.cleanup → imports app.models, app.core.logging, app.config
 
 app.core.database → imports app.config.settings
+app.core.limiter → imports slowapi (standalone, no app-level deps)
 ```
 
 No circular dependencies. Base lives in `cluster.py` — all models import from there.
@@ -170,3 +171,5 @@ All implementation decisions flow from `prompt.md`. When in doubt, check the spe
 | 2026-04-25 | Phase 4 | Data retention cleanup job, Railway/Vercel deploy config, README | cleanup.py, main.py, railway.toml, vercel.json, README.md, Dockerfile |
 | 2026-04-26 | Bugfix | Manual ingest endpoint, .gitignore rewrite | ingest.py, api/__init__.py, .gitignore |
 | 2026-04-26 | Audit | 14 bug fixes: ORM types, N+1 query, TF-IDF perf, URL normalization, error handling, RSS feeds, lifecycle, cleanup batching | 10 backend files |
+| 2026-04-26 | Enhance | HTML text cleaning, heat momentum with commit activity, topic_tokens UX (backend + frontend) | clustering.py, summarization.py, lifecycle.py, story.py, stories.py, api.ts, story-card.tsx, page.tsx |
+| 2026-04-26 | Audit 2 | 7 critical/high fixes: HTMLParser crash guard, None date guard, stale selectinload refresh, search HTML sanitization, cache invalidation, updated_at on article assignment, shared rate limiter | clustering.py, search.py, ingest.py, stories.py, main.py, core/limiter.py |

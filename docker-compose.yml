@@ -25,9 +25,11 @@ services:
       DATABASE_URL: postgresql+asyncpg://chronicle:chronicle_dev@postgres:5432/chronicle
       FRONTEND_URL: http://localhost:3000
       LLM_MODEL: ai/llama3.2:1B-Q4_0
-      LLM_BASE_URL: http://model-runner.docker.internal/engines/v1
+      LLM_BASE_URL: http://model-runner.docker.internal:12434/engines/v1
       EMBEDDING_MODEL: ai/qwen3-embedding:0.6B-F16
-      EMBEDDING_BASE_URL: http://model-runner.docker.internal/engines/llama.cpp/v1
+      EMBEDDING_BASE_URL: http://model-runner.docker.internal:12434/engines/llama.cpp/v1
+    extra_hosts:
+      - "model-runner.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

@@ -19,9 +19,9 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     llm_provider: str = "groq"
     llm_model: str = "ai/llama3.2:1B-Q4_0"
-    llm_base_url: str = "http://model-runner.docker.internal/engines/v1"
+    llm_base_url: str = "http://model-runner.docker.internal:12434/engines/v1"
     embedding_model: str = "ai/qwen3-embedding:0.6B-F16"
-    embedding_base_url: str = "http://model-runner.docker.internal/engines/llama.cpp/v1"
+    embedding_base_url: str = "http://model-runner.docker.internal:12434/engines/llama.cpp/v1"
 
 
 settings = Settings()

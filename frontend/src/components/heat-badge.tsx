@@ -18,7 +18,7 @@ function HeatBadge({ heat_score, className }: HeatBadgeProps) {
   }
   return (
     <span className={cn("rounded-full px-2.5 py-0.5 label-caps-sm", color, className)}>
-      {text}
+      {text} ({heat_score.toFixed(1)})
     </span>
   )
 }

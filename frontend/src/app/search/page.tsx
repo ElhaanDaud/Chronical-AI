@@ -27,7 +27,7 @@ export default async function Page({ searchParams }: { searchParams: { q?: strin
         <SearchBar initialQuery={q} />
       </section>
 
-      <section className="mt-6">
+      <section className="mt-6 px-md md:px-lg">
         {q && (
           <h4 className="mb-4 label-caps text-muted-foreground">Active Signals ({results.length})</h4>
         )}

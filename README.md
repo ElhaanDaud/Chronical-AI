@@ -115,7 +115,7 @@ docker compose exec backend alembic history
 docker compose exec backend alembic revision --autogenerate -m "description"
 
 # Connect to database directly
-docker compose exec postgres psql -U chronicle -d chronicle_db
+docker compose exec postgres psql -U chronicle -d chronicle
 ```
 
 ### Ingestion & Pipeline
@@ -154,7 +154,7 @@ python -m spacy download en_core_web_sm
 python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
 
 # Set DATABASE_URL to your local postgres
-export DATABASE_URL="postgresql+asyncpg://chronicle:chronicle@localhost:5432/chronicle_db"
+export DATABASE_URL="postgresql+asyncpg://chronicle:chronicle_dev@localhost:5432/chronicle"
 
 # Run migrations
 alembic upgrade head

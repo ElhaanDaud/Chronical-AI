@@ -125,6 +125,7 @@ async def get_story(
         heat_score=cluster.heat_score,
         article_count=len(cluster.articles),
         commits=[_build_commit_response(c, articles_by_id) for c in sorted_commits],
+        entity_fingerprint=cluster.entity_fingerprint or [],
         created_at=cluster.created_at,
         updated_at=cluster.updated_at,
     )

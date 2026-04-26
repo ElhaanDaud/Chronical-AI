@@ -25,6 +25,7 @@ class StoryDetail(BaseModel):
     heat_score: float
     article_count: int
     commits: list["CommitResponse"]
+    entity_fingerprint: list[str]
     created_at: datetime
     updated_at: datetime
 

@@ -8,9 +8,21 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        serif: ["var(--font-serif)", "Georgia", "serif"],
+        sans: ["var(--font-sans)", "system-ui", "sans-serif"],
+      },
       colors: {
         background: "var(--background)",
         foreground: "var(--foreground)",
+        "surface-lowest": "var(--surface-lowest)",
+        "surface-container-low": "var(--surface-container-low)",
+        "surface-container": "var(--surface-container)",
+        "surface-container-high": "var(--surface-container-high)",
+        "on-surface": "var(--on-surface)",
+        "on-surface-variant": "var(--on-surface-variant)",
+        outline: "var(--outline)",
+        "outline-variant": "var(--outline-variant)",
         card: {
           DEFAULT: "var(--card)",
           foreground: "var(--card-foreground)",
@@ -27,6 +39,8 @@ const config: Config = {
           DEFAULT: "var(--secondary)",
           foreground: "var(--secondary-foreground)",
         },
+        "secondary-container": "var(--secondary-container)",
+        "secondary-fixed": "var(--secondary-fixed)",
         muted: {
           DEFAULT: "var(--muted)",
           foreground: "var(--muted-foreground)",
@@ -42,10 +56,25 @@ const config: Config = {
         input: "var(--input)",
         ring: "var(--ring)",
       },
+      spacing: {
+        xs: "var(--space-xs)",
+        sm: "var(--space-sm)",
+        md: "var(--space-md)",
+        lg: "var(--space-lg)",
+        xl: "var(--space-xl)",
+        "2xl": "var(--space-2xl)",
+        gutter: "var(--layout-gutter)",
+        margin: "var(--layout-margin)",
+      },
+      maxWidth: {
+        container: "var(--container-max)",
+      },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        sm: "var(--radius-sm)",
+        DEFAULT: "var(--radius)",
+        md: "var(--radius-md)",
+        lg: "var(--radius-lg)",
+        full: "var(--radius-full)",
       },
     },
   },

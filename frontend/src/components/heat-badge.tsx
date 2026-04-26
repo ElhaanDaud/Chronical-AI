@@ -1,20 +1,25 @@
-import React from "react"
-import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 
 type HeatBadgeProps = {
-  state: "active" | "cooling" | "hibernated"
   heat_score: number
+  state?: "active" | "cooling" | "hibernated"
   className?: string
 }
 
-function HeatBadge({ state, heat_score, className }: HeatBadgeProps) {
-  const variant = state === "active" ? "destructive" : state === "hibernated" ? "secondary" : "default"
-  const extra = state === "cooling" ? "bg-amber-500 text-amber-900" : undefined
+function HeatBadge({ heat_score, className }: HeatBadgeProps) {
+  let text = "COOLING";
+  let color = "bg-muted text-muted-foreground";
+  if (heat_score >= 3.0) {
+    text = "HIGH HEAT";
+    color = "bg-secondary/15 text-secondary";
+  } else if (heat_score >= 1.0) {
+    text = "RISING HEAT";
+    color = "bg-amber-500/15 text-amber-600";
+  }
   return (
-    <Badge variant={variant} className={cn(extra, className)}>
-      {state} • {heat_score.toFixed(1)}
-    </Badge>
+    <span className={cn("rounded-full px-2.5 py-0.5 label-caps-sm", color, className)}>
+      {text}
+    </span>
   )
 }
 

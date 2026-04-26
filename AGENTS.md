@@ -35,7 +35,7 @@ chronical-ai/
 ├── docker-compose.yml     # postgres:16-alpine + backend + frontend (extra_hosts for DMR)
 ├── .env.example
 ├── prompt.md              # 1100-line implementation spec (the bible)
-└── orchestrator.md        # 4-phase implementation plan
+└── orchestrator.md        # 7-phase frontend redesign plan (Editorial Intelligence design system)
 ```
 
 ## Where to Look
@@ -102,6 +102,8 @@ No circular dependencies. Base lives in `cluster.py` — all models import from 
 - **Migration defaults**: Use `sa.text()` wrapper for JSONB server_default (asyncpg double-escapes raw strings)
 - **Error handling**: All scheduler jobs wrapped in try/except. API endpoints handle DB errors gracefully
 - **Frontend**: Server components by default. Client components ("use client") only for interactivity (CatchUpPanel, SearchBar, StoryCard, CommitLog)
+- **Frontend Design System**: Newsreader (serif, headlines) + Inter (sans, body/UI). Material Symbols Outlined icons via `<MaterialIcon>` component. Editorial Intelligence color palette (CSS variables in globals.css). 4px spacing base unit. No hardcoded hex in components — always CSS variables via Tailwind
+- **Frontend Orchestrator**: All frontend redesign phases documented in `orchestrator.md`. Reference designs in `/stitch_chronicle_ai_product_interface/` (6 HTML + 6 screenshots + 2 DESIGN.md)
 
 ## Anti-Patterns (This Project)
 
@@ -184,3 +186,4 @@ All implementation decisions flow from `prompt.md`. When in doubt, check the spe
 | 2026-04-26 | DMR Setup | Docker Engine DMR config: port 12434, extra_hosts networking, prompt hardening for Llama 3.2 1B JSON compliance | config.py, docker-compose.yml, .env.example, llm.py |
 | 2026-04-26 | GDELT | GDELT Doc API historical backfill (20 days, English), asyncio.gather parallel LLM calls, prompt caching, DMR thread tuning (8 threads, batch 1024) | gdelt.py, clustering.py, llm.py, main.py, ingest.py |
 | 2026-04-26 | GDELT Fix | GDELT backfill creates Article rows (source_urls populated), LLM search query generation, post-fetch English filter, URL encoding, cache invalidation after backfill | gdelt.py, main.py |
+| 2026-04-27 | Frontend Redesign Plan | Complete frontend redesign orchestrator: 7 phases (P0-P6), Editorial Intelligence design system (Newsreader+Inter fonts, Paper&Ink light + Navy dark palettes, 4px spacing, Material Symbols), gap analysis, component specs for dashboard/story-detail/search, AGENTS.md updated with frontend conventions | orchestrator.md, AGENTS.md |

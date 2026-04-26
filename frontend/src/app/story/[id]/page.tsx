@@ -27,7 +27,7 @@ export default async function StoryDetailPage({ params }: PageProps) {
     allStories = []
   }
 
-  const entities: string[] = story.entity_fingerprint.length > 0 ? story.entity_fingerprint : story.topic_tokens
+  const entities: string[] = story.entity_fingerprint && story.entity_fingerprint.length > 0 ? story.entity_fingerprint : story.topic_tokens
 
   return (
     <div className="space-y-xl">

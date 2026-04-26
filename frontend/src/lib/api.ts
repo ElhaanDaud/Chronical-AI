@@ -26,7 +26,7 @@ export interface StoryDetail {
   heat_score: number;
   article_count: number;
   commits: CommitResponse[];
-  entity_fingerprint: string[];
+  entity_fingerprint?: string[];
   created_at: string;
   updated_at: string;
 }

@@ -29,10 +29,8 @@ function CommitLog({ commits }: CommitLogProps) {
               <div key={c.id} className="relative pl-10">
                 <span
                   className={cn(
-                    "absolute rounded-full border-2 border-background",
-                    isLatest
-                      ? "left-0 top-1 h-[14px] w-[14px] bg-secondary"
-                      : "left-[3px] top-1.5 h-2 w-2 bg-muted-foreground/50"
+                    "absolute left-0 top-1 h-[14px] w-[14px] rounded-full border-2 border-background",
+                    isLatest ? "bg-secondary" : "bg-muted-foreground"
                   )}
                 />
                 <div className="flex flex-col gap-1">

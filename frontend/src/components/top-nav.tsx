@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { SearchBar } from "@/components/search-bar";
 import MaterialIcon from "@/components/material-icon";
 import { Button } from "@/components/ui/button";
@@ -10,11 +11,7 @@ import ThemeToggle from "@/components/theme-toggle";
 
 const NAV_LINKS = [
   { label: "Home Feed", href: "/", italic: true },
-  { label: "Commit Timeline", href: "#" },
-  { label: "Investigations", href: "#" },
-  { label: "Sources", href: "#" },
-  { label: "Saved", href: "#" },
-  { label: "Archives", href: "#" },
+  { label: "Search", href: "/search" },
 ];
 
 type TopNavProps = {
@@ -23,6 +20,20 @@ type TopNavProps = {
 
 export default function TopNav({ onMenuToggle }: TopNavProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [ingesting, setIngesting] = useState(false);
+
+  const handleIngest = async () => {
+    setIngesting(true);
+    try {
+      const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      await fetch(`${base}/api/ingest?full_pipeline=true`, { method: "POST" });
+      router.refresh();
+    } catch {
+    } finally {
+      setIngesting(false);
+    }
+  };
 
   return (
     <header className="fixed top-0 w-full z-50 h-16 flex items-center justify-between px-6 bg-card/80 backdrop-blur-md border-b border-border">
@@ -63,22 +74,15 @@ export default function TopNav({ onMenuToggle }: TopNavProps) {
         <div className="hidden sm:block">
           <SearchBar />
         </div>
-        <Button className="hidden sm:inline-flex label-caps-sm px-4 py-2">
-          Ingest Refresh
+        <Button
+          className="hidden sm:inline-flex label-caps-sm px-4 py-2"
+          onClick={handleIngest}
+          disabled={ingesting}
+        >
+          <MaterialIcon name={ingesting ? "hourglass_empty" : "refresh"} size={16} />
+          <span className="ml-1">{ingesting ? "Ingesting…" : "Ingest Refresh"}</span>
         </Button>
         <ThemeToggle />
-        <button
-          aria-label="Notifications"
-          className="p-2 rounded-full hover:bg-accent/50 transition-colors"
-        >
-          <MaterialIcon name="notifications" />
-        </button>
-        <button
-          aria-label="Account"
-          className="p-2 rounded-full hover:bg-accent/50 transition-colors"
-        >
-          <MaterialIcon name="account_circle" />
-        </button>
       </div>
     </header>
   );

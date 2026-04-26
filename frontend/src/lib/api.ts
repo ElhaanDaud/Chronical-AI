@@ -67,7 +67,7 @@ export async function fetchStory(id: string): Promise<StoryDetail> {
 }
 
 export async function fetchCatchUp(id: string): Promise<CatchUpResponse> {
-  const res = await fetch(`${API_BASE}/api/stories/${id}/catchup`);
+  const res = await fetch(`${SERVER_API_BASE}/api/stories/${id}/catchup`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }

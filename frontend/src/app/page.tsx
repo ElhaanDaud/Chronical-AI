@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type { StoryCard as StoryCardType } from "@/lib/api";
 import { fetchStories } from "../lib/api";
 import FeaturedCard from "@/components/featured-card";
@@ -12,17 +11,23 @@ export const dynamic = "force-dynamic";
 export const revalidate = 300;
 
 export default async function Page() {
-  const stories: StoryCardType[] = await fetchStories();
-  const hasLive = stories?.some((s) => s.heat_score >= 5.0) ?? false;
+  let stories: StoryCardType[] = [];
+  try {
+    stories = await fetchStories();
+  } catch {
+    stories = [];
+  }
+
+  const hasLive = stories.some((s) => s.heat_score >= 5.0);
 
   const digestStories = stories
-    ?.slice()
+    .slice()
     .sort((a, b) => b.heat_score - a.heat_score)
-    .slice(0, 5) ?? [];
+    .slice(0, 5);
   const timelineStories = stories
-    ?.slice()
+    .slice()
     .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime())
-    .slice(0, 8) ?? [];
+    .slice(0, 8);
 
   return (
     <section className="p-6">
@@ -32,11 +37,7 @@ export default async function Page() {
           {hasLive && <LiveBadge />}
         </div>
         <div className="flex items-center gap-2">
-          <span className="label-caps-sm text-muted-foreground bg-card border border-border px-3 py-1 rounded-full">{stories?.length ?? 0} ACTIVE THREADS</span>
-          <div className="flex items-center gap-2">
-            <span className="label-caps-sm bg-card border border-border px-3 py-1 rounded-full text-muted-foreground">Latest</span>
-            <span className="label-caps-sm bg-card border border-border px-3 py-1 rounded-full text-muted-foreground">Trending</span>
-          </div>
+          <span className="label-caps-sm text-muted-foreground bg-card border border-border px-3 py-1 rounded-full">{stories.length} ACTIVE THREADS</span>
         </div>
       </div>
 
@@ -55,7 +56,7 @@ export default async function Page() {
             <div className="bg-card border border-border rounded-lg p-md whisper-shadow h-56 flex flex-col items-center justify-center">
               <MaterialIcon name="search_off" className="text-4xl text-muted-foreground" />
               <div className="mt-2 text-muted-foreground">No active stories</div>
-              <Link href="/ingest" className="mt-3 label-caps-sm text-secondary rounded-full border border-secondary px-3 py-1">Ingest feeds</Link>
+              <span className="mt-3 body-sm text-muted-foreground">Use the Ingest Refresh button to load feeds</span>
             </div>
           )}
         </div>

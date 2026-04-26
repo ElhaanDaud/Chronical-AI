@@ -7,11 +7,7 @@ import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { label: "Home Feed", href: "/", icon: "newspaper" },
-  { label: "Commit Timeline", href: "#", icon: "timeline" },
-  { label: "Investigations", href: "#", icon: "search_insights" },
-  { label: "Sources", href: "#", icon: "menu_book" },
-  { label: "Saved", href: "#", icon: "bookmark" },
-  { label: "Archives", href: "#", icon: "inventory_2" },
+  { label: "Search", href: "/search", icon: "search" },
 ];
 
 type SidebarProps = {
@@ -53,25 +49,9 @@ function SidebarContent() {
       </div>
 
       <div className="border-t border-border p-6 mt-auto">
-        <button className="w-full bg-primary text-primary-foreground label-caps uppercase tracking-widest py-3 mb-6 hover:opacity-90 transition-opacity">
-          New Briefing
-        </button>
-        <div className="flex flex-col gap-4">
-          <Link
-            href="#"
-            className="text-muted-foreground hover:text-foreground flex items-center gap-4 text-[10px] tracking-widest uppercase transition-colors"
-          >
-            <MaterialIcon name="settings" size={18} />
-            Settings
-          </Link>
-          <Link
-            href="#"
-            className="text-muted-foreground hover:text-foreground flex items-center gap-4 text-[10px] tracking-widest uppercase transition-colors"
-          >
-            <MaterialIcon name="help_outline" size={18} />
-            Support
-          </Link>
-        </div>
+        <p className="text-muted-foreground text-[10px] tracking-widest uppercase">
+          Chronicle AI
+        </p>
       </div>
     </nav>
   );

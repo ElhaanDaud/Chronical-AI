@@ -19,7 +19,7 @@ export function EntityChips({ entities, className }: EntityChipsProps) {
         {entities.map((entity) => (
           <span
             key={entity}
-            className="px-3 py-1.5 bg-surface-container text-on-surface text-sm border border-border rounded-full dark:bg-slate-800 dark:border-slate-700"
+            className="px-3 py-1.5 bg-foreground text-background text-sm rounded-full dark:bg-slate-800 dark:text-slate-200 dark:border dark:border-slate-700"
           >
             {entity}
           </span>

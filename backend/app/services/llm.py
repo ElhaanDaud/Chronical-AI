@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import time
 
 import numpy as np
@@ -7,6 +8,9 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 from app.core.logging import logger
+
+
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", re.DOTALL)
 
 _dmr_client: AsyncOpenAI | None = None
 _groq_client: AsyncOpenAI | None = None
@@ -95,6 +99,17 @@ async def _call_llm(
             content = resp.choices[0].message.content
             if content:
                 result = content.strip()
+                fence_match = _CODE_FENCE_RE.match(result)
+                if fence_match:
+                    result = fence_match.group(1).strip()
+                if json_mode:
+                    try:
+                        json.loads(result)
+                    except (json.JSONDecodeError, ValueError):
+                        logger.warning(
+                            f"LLM provider '{name}' returned invalid JSON, trying next provider"
+                        )
+                        continue
                 _prompt_cache[cache_key] = (result, time.time())
                 if len(_prompt_cache) > 500:
                     oldest_key = min(_prompt_cache, key=lambda k: _prompt_cache[k][1])
@@ -131,7 +146,6 @@ async def generate_topic_label(article_titles: list[str]) -> str | None:
     except (json.JSONDecodeError, AttributeError):
         pass
 
-    import re
     match = re.search(r'"label"\s*:\s*"([^"]+)"', result)
     if match:
         return match.group(1)
@@ -198,7 +212,6 @@ async def generate_commit_summary(
     except (json.JSONDecodeError, AttributeError):
         pass
 
-    import re
     msg_match = re.search(r'"message"\s*:\s*"([^"]+)"', result)
     det_match = re.search(r'"detail"\s*:\s*"([^"]+)"', result)
     if msg_match and det_match:

@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     ingestion_interval_minutes: int = 30
     clustering_interval_hours: int = 2
     article_retention_days: int = 30
+    auth_secret: str = "change-me"
+    auth_access_token_ttl_seconds: int = 3600
 
     groq_api_key: str = ""
     llm_provider: str = "groq"

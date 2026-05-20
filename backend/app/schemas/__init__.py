@@ -6,6 +6,7 @@ from app.schemas.story import (
     StoryDetail,
 )
 from app.schemas.common import ErrorResponse, HealthResponse
+from app.schemas.user import LoginRequest, TokenResponse, UserCreate, UserRead, UserUpdate
 
 __all__ = [
     "StoryCard",
@@ -15,4 +16,9 @@ __all__ = [
     "SearchResult",
     "HealthResponse",
     "ErrorResponse",
+    "UserRead",
+    "UserCreate",
+    "UserUpdate",
+    "LoginRequest",
+    "TokenResponse",
 ]

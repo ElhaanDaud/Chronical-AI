@@ -193,9 +193,9 @@ async def generate_commit_summary(
     system = (
         "You are a news editor. Summarize the latest developments in this story.\n"
         f"Story: {topic_label}\n\n"
-        "Output JSON with two fields:\n"
-        '- "message": A headline-style summary in 10-20 words\n'
-        '- "detail": A 2-3 sentence paragraph explaining the key developments'
+        "Respond ONLY with valid JSON. Do not include markdown formatting or extra text. Format:\n"
+        '{\n  "message": "A headline-style summary in 10-20 words",\n'
+        '  "detail": "A 2-3 sentence paragraph explaining the key developments"\n}'
     )
     user = f"Latest articles:\n{articles_text}"
 
@@ -219,6 +219,18 @@ async def generate_commit_summary(
         if msg.lower() not in ("short update", "update", "news update"):
             return msg, det_match.group(1)
 
+    logger.warning(f"Failed to parse LLM commit summary output as JSON, attempting text fallback")
+    
+    clean_result = result.strip('` \n')
+    if clean_result.lower().startswith('json'):
+        clean_result = clean_result[4:].strip()
+        
+    sentences = re.split(r'(?<=[.!?])\s+', clean_result)
+    if sentences:
+        msg = sentences[0][:150].strip()
+        if msg and msg.lower() not in ("short update", "update", "news update"):
+            return msg, clean_result
+            
     return None
 
 
